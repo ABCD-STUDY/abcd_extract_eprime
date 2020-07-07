@@ -16,7 +16,8 @@ function mmil_write_csv(fname,data,varargin)
 %     {default: []}
 %
 % Created:  05/23/09 by Don Hagler
-% Last Mod: 12/12/13 by Don Hagler
+% Prev Mod: 03/20/19 by Don Hagler
+% Last Mod: 05/12/20 by Don Hagler
 %   
 
 if ~mmil_check_nargs(nargin,2), return; end;
@@ -39,9 +40,13 @@ if ~isempty(parms.col_labels) & length(parms.col_labels) ~= ncols
     length(parms.col_labels),ncols);
 end;
 
+% check if separator is \t, change to actual tab character
+if strcmp(parms.separator,'\t'), parms.separator = sprintf(parms.separator); end;
+
 data_is_cellarray = iscell(data);
 
 fid = fopen(fname,'w');
+if fid<0, error('failed to open %s for writing',fname); end;
 if ~isempty(parms.col_labels)
   if ~isempty(parms.row_labels)
     fprintf(fid,'%s%s',parms.firstcol_label,parms.separator);

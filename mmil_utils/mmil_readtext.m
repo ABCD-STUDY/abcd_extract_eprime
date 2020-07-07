@@ -258,7 +258,7 @@ function      [data, result]= readtext(fname, delimiter, comment, quotes, option
 	empties=			cellfun('isempty', data);				% Find empty items.
 	result.emptyMask=	empties;
 	if(op_textual)
-		result.numberMask=	repmat(false, size(data));			% No numbers, all strings.
+		result.numberMask=	false(size(data));			% No numbers, all strings.
 		result.stringMask=	~empties;							% No numbers, all strings.
 		data(empties)=		{op_empty};							% Set correct empty value.
 	else
@@ -286,7 +286,7 @@ function      [data, result]= readtext(fname, delimiter, comment, quotes, option
     for j = 1:size(data,2)
       if ischar(data{i,j})
         s = data{i,j};
-        if s(1) == '"' & s(end) == '"'
+        if s(1) == '"' && s(end) == '"'
           data{i,j} = s(2:end-1);
         end
       end
