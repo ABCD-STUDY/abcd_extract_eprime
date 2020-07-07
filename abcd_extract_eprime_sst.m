@@ -1,5 +1,5 @@
-function [eprime_nruns,errcode] = abcd_extract_eprime_sst(fname,varargin)
-%function abcd_extract_eprime_sst(fname,[options])
+function [eprime_nruns,errcode,behav] = abcd_extract_eprime_sst(fname,varargin)
+%function [eprime_nruns,errcode,behav] = abcd_extract_eprime_sst(fname,[options])
 %
 % Purpose: extract condition time courses
 %   from eprime data files for SST task
@@ -27,14 +27,21 @@ function [eprime_nruns,errcode] = abcd_extract_eprime_sst(fname,varargin)
 %     {default = 0}
 %   'timing_files_flag': [0|1] generate timing files
 %     {default = 1}
+%   'verbose': [0|1] display messages
+%     {default = 1}
 %
 % Output: 
 %    eprime_nruns: number of valid runs in the e-prime in the file  
 %    errcode: [0|1] whether the file was successfully processed  
+%    behav: behavioral data
 %
 % Created:  10/07/16 by Don Hagler
-% Prev Mod: 04/30/18 by Dani Cornejo 
-% Last Mod: 07/25/18 by Dani Cornejo
+% Prev Mod: 02/12/19 by Dani Cornejo
+% Prev Mod: 03/12/19 by Feng Xue
+% Prev Mod: 08/05/19 by Octavio Ruiz
+% Prev Mod: 04/01/20 by Don Hagler
+% Prev Mod: 05/14/20 by Don Hagler
+% Last Mod: 05/17/20 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -46,25 +53,27 @@ function [eprime_nruns,errcode] = abcd_extract_eprime_sst(fname,varargin)
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+% initialize outputs
+eprime_nruns = []; errcode = 0; behav = [];
 
 % check arguments 
 if ~mmil_check_nargs(nargin,1), return; end;
 
 % check input parameters
-parms = check_input(fname,varargin);   
-errcode = parms.errcode; 
+parms = check_input(fname,varargin); 
 
 % create output directory
 mmil_mkdir(parms.outdir);
 
-try 
 % create structure with info for each event
 % write field _events from original; no processing  
-[event_info,start_time,all_types] = get_event_info(parms);  
+[event_info,start_time,all_types,errcode] = get_event_info(parms);  
+if errcode, return; end;
 
 % switch buttons if necessary 
 % file _switched.csv will be created 
-[event_info,parms.switch_flag] = sst_switch(event_info,parms); 
+[event_info,parms.switch_flag,errcode] = sst_switch(event_info,parms); 
+if errcode, return; end;
 
 % Replace and/or add events names that were not coded 
 % correctly by the e-prime software. For example trials 
@@ -78,12 +87,14 @@ write_event_revised(parms,all_types_new);
 
 % Get behav data and write it to a csv file 
 % using revised events saved in all_types_new
-% timing cells don't change 
-[~,eprime_runs] = get_behavioral_data(event_info,parms,all_types_new); 
+% timing cells don't change
+[behav,eprime_runs,errcode] = get_behavioral_data(event_info,parms,all_types_new);
+if errcode, return; end;
+
 parms.eprime_runs = eprime_runs; 
 eprime_nruns = length(eprime_runs);
 parms.eprime_nruns = eprime_nruns; 
-fprintf('%s: number of e-prime runs = %d \n',mfilename,eprime_nruns);
+if parms.verbose, fprintf('%s: number of e-prime runs = %d \n',mfilename,eprime_nruns); end
 
 if parms.timing_files_flag && eprime_nruns
   % create files for each condition
@@ -101,15 +112,16 @@ if parms.timing_files_flag && eprime_nruns
       case 'go'
         % get times of stim onset and offset
         parms.mindur = 0.08;  
-        onset  = [event_info(ind_type).(['go_onset_time'])];    
-        offset = [event_info(ind_type).(['go_offset_time'])];    
+        onset  = {event_info(ind_type).(['go_onset_time'])};
+        offset = {event_info(ind_type).(['go_offset_time'])};    
+        [onset,offset] = check_offsets(onset,offset,event);
       case 'stop'
         % get times of stim onset and offset
         parms.mindur = 0;  
-        %onset  = [event_info(ind_type).(['ssd_onset_time'])];%old way 
         onset  = [event_info(ind_type).(['stop_start_time'])];
         offset = onset+20;         
     end
+    
     % find most recent start time for each event
     [ind_start,event_ref_time] = set_ref(onset,start_time);  
     % create files for each scan
@@ -117,16 +129,6 @@ if parms.timing_files_flag && eprime_nruns
   end 
 end; %timing_files_flag
 
-catch 
-  
-  % get behav data and write it to a csv
-  get_behavioral_data_empty(parms); 
-  parms.eprime_nruns=0; eprime_nruns=parms.eprime_nruns; 
-  parms.errcode=1; errcode=parms.errcode; 
-  fprintf('%s: Empty behavioral file created \n',mfilename)
-  error('%s: Empty behavioral file created \n',mfilename)
-  
-end %try 
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -144,9 +146,9 @@ function parms = check_input(fname,options)
     'switch_thresh',0.3,[0,0.5],...
     'forceflag',false,[false true],...
     'timing_files_flag',true,[false true],...
+    'verbose',true,[false true],...
     'eprime_runs',1:2,[],...   
     'eprime_nruns',0,0:2,...
-    'errcode',0,0:1,...
     ...
     'colnames',  {'NARGUID','SessionDate','SessionTime','ExperimentName','ExperimentVersion',...
                   'Subject','Procedure[Block]','Block','Trial','GetReady.RTTime', 'BeginFix.StartTime',...
@@ -180,8 +182,12 @@ function parms = check_input(fname,options)
   end;
   [fdir,fstem,fext] = fileparts(parms.fname);
   if isempty(parms.outstem)
-    %parms.outstem = fstem;
+    % remove spaces
     parms.outstem = regexprep(fstem,'\s.+','');
+    % remove quotes
+    parms.outstem = regexprep(parms.outstem,'''','');
+    % remove extra extension
+    parms.outstem = regexprep(parms.outstem,'\..+','');
   end;
 
   % compute time at the end of each TR
@@ -191,17 +197,20 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [event_info,start_time,all_types] = get_event_info(parms)
+function [event_info,start_time,all_types,errcode] = get_event_info(parms)
   
-  event_info=[]; start_time=[]; all_types=[]; 
+  event_info=[]; start_time=[]; all_types=[];
+  errcode = 0;
   
   try 
-  % write event info to file
-  fname_csv = abcd_check_eprime_sprdsh(parms.fname,parms.colnames,...
-    parms.fieldnames,parms.outdir,parms.forceflag);
-  event_info = mmil_csv2struct(fname_csv);
-  catch
-    fprintf('%s: ERROR: Failed reading e-prime file (format issues) \n',mfilename);  
+    % write event info to file
+    fname_csv = abcd_check_eprime_sprdsh(parms.fname, parms.colnames,...
+                  parms.fieldnames, parms.outdir, parms.forceflag, parms.verbose);
+    event_info = mmil_csv2struct(fname_csv);
+  catch me
+    fprintf('%s: ERROR: failed to read e-prime file (format issues)\n%s\n',...
+      mfilename,me.message);
+    errcode = 1;
     return;
   end
   
@@ -214,31 +223,45 @@ function [event_info,start_time,all_types] = get_event_info(parms)
   event_info = event_info(ind_events); 
   all_types = {event_info.type};    
 
+  % check go_cresp
+  if any(cellfun(@isstr,{event_info.go_cresp}))
+    if parms.verbose
+      fprintf('%s: WARNING: replacing go_cresp strings with numeric\n',...
+        mfilename);
+    end;
+    for i=1:length(event_info)
+      if isstr(event_info(i).go_cresp)
+        % remove text description of response
+        event_info(i).go_cresp = str2num(regexprep(event_info(i).go_cresp,',.+',''));
+      end;
+    end;
+  end;
+  
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
-function [event_info,switch_flag] = sst_switch(event_info,parms)
-  
- [switch_flag,acc1,~] = sst_switch_flag(event_info,parms); 
+function [event_info,switch_flag,errcode] = sst_switch(event_info,parms)
+  [switch_flag,acc1,errcode] = sst_switch_flag(event_info,parms); 
+  if errcode, return; end;
  
- if switch_flag 
-   event_info = sst_switch_event(event_info);
-   [~,acc2,~] = sst_switch_flag(event_info,parms);
-   if acc2 < acc1
-     event_info = sst_switch_event(event_info);
-     switch_flag = 0; 
-   end 
- end
+  if switch_flag 
+    event_info = sst_switch_event(event_info);
+    [~,acc2,~] = sst_switch_flag(event_info,parms);
+    if acc2 < acc1
+      event_info = sst_switch_event(event_info);
+      switch_flag = 0; 
+    end 
+  end
  
- % write to csv
- if switch_flag 
-   fname_csv_out  = sprintf('%s/%s_events_switched.csv',...
-      parms.outdir,parms.outstem); 
-   if ~exist(fname_csv_out,'file') || parms.forceflag
-     mmil_struct2csv(event_info,fname_csv_out)
-   end;
- end; 
+  % write to csv
+  if switch_flag 
+    fname_csv_out  = sprintf('%s/%s_events_switched.csv',...
+        parms.outdir,parms.outstem); 
+    if ~exist(fname_csv_out,'file') || parms.forceflag
+      mmil_struct2csv(event_info,fname_csv_out)
+    end;
+  end; 
  
 return;
 
@@ -262,7 +285,6 @@ function event_info = sst_switch_event(event_info)
    elseif event_info(i).stop_resp == 2
      event_info(i).stop_resp=1;
    end    
-   
    if event_info(i).go_resp == event_info(i).go_cresp
      event_info(i).go_acc=1;
    elseif event_info(i).go_resp ~= event_info(i).go_cresp
@@ -276,7 +298,6 @@ return;
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
 function [switch_flag,accuracy,errcode] = sst_switch_flag(event_info,parms) 
-  
   switch_flag = 0;
   errcode = 0;
   
@@ -284,15 +305,15 @@ function [switch_flag,accuracy,errcode] = sst_switch_flag(event_info,parms)
   correct_total = size(all_types,2);
   correct = sum(all_types); 
   accuracy = 100*correct/correct_total;
-  fprintf('%s: accuracy = %0.1f%%\n',mfilename,accuracy);
+  if parms.verbose, fprintf('%s: accuracy = %0.1f%%\n',mfilename,accuracy); end
   
   if accuracy == 0
-    error('%s: accuracy equals zero, probably format error \n',mfilename);
+    fprintf('%s: ERROR: accuracy equals zero, probably format error\n',mfilename);
     errcode = 1; 
     return; 
   elseif accuracy < 100*parms.switch_thresh
-    fprintf('%s: accuracy < %0.1f%%, switching button responses\n',...
-      mfilename,100*parms.switch_thresh);
+    if parms.verbose, fprintf('%s: accuracy < %0.1f%%, switching button responses\n',...
+      mfilename,100*parms.switch_thresh); end
     switch_flag = 1;
   end;
   
@@ -341,7 +362,7 @@ function all_types_new = get_sst_types(event_info,parms)
   go_cresp = {event_info.go_cresp};
   go_resp = {event_info.go_resp};  
   correct_go_ind = [];
-  for i=1:size(go_cresp,2)  
+  for i=1:size(go_cresp,2)
     if go_resp{i} == go_cresp{i}
       correct_go_ind = [correct_go_ind i]; 
       all_types_new{i} = 'CorrectGo';
@@ -424,6 +445,21 @@ function [ind_start,event_ref_time] = set_ref(onset,start_time)
     ind_start = start_time;
     event_ref_time = 0;
   end;
+return;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+function [onset,offset] = check_offsets(onset,offset,eventname)
+  ind_empty = find(cellfun(@isempty,onset) | cellfun(@isempty,offset));
+  if ~isempty(ind_empty)
+    fprintf('%s: WARNING: %s event has %d onsets but %d offsets\n',...
+      mfilename,eventname,nnz(~cellfun(@isempty,onset)),nnz(~cellfun(@isempty,offset)));
+    ind_keep = setdiff([1:length(onset)],ind_empty);
+    onset = onset(ind_keep);
+    offset = offset(ind_keep);
+  end;
+  onset = cell2mat(onset);
+  offset = cell2mat(offset);
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -530,7 +566,8 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [behav, runs_ok] = get_behavioral_data(event_info,parms,all_types_new) 
+function [behav,runs_ok,errcode] = get_behavioral_data(event_info,parms,all_types_new) 
+  errcode = 0;
 
   behav = []; 
   behav.('SubjID') = []; behav.('VisitID') = []; 
@@ -557,7 +594,7 @@ function [behav, runs_ok] = get_behavioral_data(event_info,parms,all_types_new)
     if run_len == 182 %hardcode the run lenght for now
      runs_ok = [runs_ok i];  
     else 
-     fprintf('%s: run %d is short: %d trials found (<182 trials) \n',mfilename,i,run_len);
+     if parms.verbose, fprintf('%s: run %d is short: %d trials found (<182 trials) \n',mfilename,i,run_len); end
     end 
   end
   nruns = length(runs_ok); 
@@ -570,7 +607,8 @@ function [behav, runs_ok] = get_behavioral_data(event_info,parms,all_types_new)
     runs = runs(new_info);
   elseif nruns == 0
    fprintf('%s: ERROR: no valid e-prime runs \n',mfilename); 
-   error('%s: ERROR: no valid e-prime runs \n',mfilename); 
+   errcode = 1;
+   return;
   end  
   behav.nruns = nruns; 
   
@@ -683,7 +721,7 @@ function [behav, runs_ok] = get_behavioral_data(event_info,parms,all_types_new)
     end  
     
     
-  end 
+  end
   % ssd and ssrt 
   ssd = {event_info.ssd_dur}; 
   behav.('SSD_mean_total')= mean(cell2mat(ssd));   
@@ -701,30 +739,34 @@ function [behav, runs_ok] = get_behavioral_data(event_info,parms,all_types_new)
   
   %behav flag 
   if behav.CorrectGo_percent_total < 0.6   
-    fprintf('%s: CorrectGo_percent_total < 60%% \n',mfilename); 
+    if parms.verbose, fprintf('%s: CorrectGo_percent_total < 60%% \n',mfilename); end
     behav.perform_flag = 0; 
   end 
   if behav.IncorrectGo_percent_total > 0.3
-    fprintf('%s: IncorrectGo_percent_total > 30%% \n',mfilename); 
+    if parms.verbose, fprintf('%s: IncorrectGo_percent_total > 30%% \n',mfilename); end
     behav.perform_flag = 0; 
   end 
   late_go = behav.CorrectLateGo_percent_total+behav.IncorrectLateGo_percent_total;
   if late_go > 0.3 
-    fprintf('%s: LateGo > 30%% \n',mfilename); 
+    if parms.verbose, fprintf('%s: LateGo > 30%% \n',mfilename); end
     behav.perform_flag = 0; 
   end
   if behav.NoRespGo_percent_total > 0.3
-    fprintf('%s: NoRespGo_percent_total > 30%% \n',mfilename); 
+    if parms.verbose, fprintf('%s: NoRespGo_percent_total > 30%% \n',mfilename); end
     behav.perform_flag = 0; 
   end 
   if behav.CorrectStop_percent_total < 0.2 || behav.CorrectStop_percent_total > 0.8
-    fprintf('%s: CorrectStop_percent_total < 20%% or > 80%% \n',mfilename); 
+    if parms.verbose, fprintf('%s: CorrectStop_percent_total < 20%% or > 80%% \n',mfilename); end
     behav.perform_flag = 0; 
   end 
   if behav.Go_total ~= 300
-    fprintf('%s: Go_total trials not equal to 300 \n',mfilename); 
+    if parms.verbose, fprintf('%s: Go_total trials not equal to 300 \n',mfilename); end
     behav.perform_flag = 0; 
-  end 
+  end
+  if behav.CorrectGo_rt_total < behav.IncorrectStop_rt_total
+    if parms.verbose, fprintf('%s: correct_go_rt < incorrect_stop_rt \n',mfilename);end
+    behav.perform_flag = 0;
+  end;
   % write to csv
   fname_csv_out = sprintf('%s/%s_behavioral.csv',parms.outdir,parms.outstem); 
   if ~exist(fname_csv_out,'file') || parms.forceflag
