@@ -1,5 +1,5 @@
-function abcd_extract_eprime_rec(fnamewm,fnamerec,varargin)
-%function abcd_extract_eprime_rec(fnamewm,fnamerec,[options])
+function [errcode,behav] = abcd_extract_eprime_rec(fnamewm,fnamerec,varargin)
+%function [errcode,behav] = abcd_extract_eprime_rec(fnamewm,fnamerec,[options])
 %
 % Purpose: generate behav data for n-back REC files 
 %
@@ -17,16 +17,30 @@ function abcd_extract_eprime_rec(fnamewm,fnamerec,varargin)
 %     {default = 0.3}
 %   'forceflag': [0|1] overwrite existing output
 %     {default = 0}
+%   'verbose': [0|1] display messages
+%     {default = 1}
 %
+% Output: 
+%    behav: behavioral data
+%
+% Created : 11/16/17 by Dani Cornejo 
+% Prev Mod: 01/23/19 by Dani Cornejo
+% Prev Mod: 05/13/20 by Octavio Ruiz
+% Prev Mod: 05/14/20 by Don Hagler
+% Prev Mod: 05/17/20 by Don Hagler
+% Last Mod: 05/21/20 by Octavio Ruiz
+%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Do not modify this section:
 % Based on abcd_extract_eprime_nback.m 
 % Created : 01/06/17 by Jose Teruel 
 % Prev Mod: 09/13/17 by Don Hagler
 % Last Mod: 11/08/17 by Dani Cornejo
-% 
-% Created : 11/16/17 by Dani Cornejo 
-% Prev Mod: 12/14/17 by Dani Cornejo 
-% Last Mod: 07/25/17 by Dani Cornejo
-%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% initialize outputs
+errcode = 0; behav = [];
 
 % check arguments 
 if ~mmil_check_nargs(nargin,2), return; end;
@@ -38,35 +52,27 @@ parms = check_input(fnamewm,fnamerec,varargin);
 mmil_mkdir(parms.outdir);
 
 if ~parms.errcode_nback 
- try 
-  % create struct with info for each event in WM 
-  [event_info_wm,~] = get_event_info_wm(parms); 
+  % create struct with info for each event in WM
+  [event_info_wm,event_info_proc_wm,errcode] = get_event_info_wm(parms);
+  if errcode, return; end;
  
   % create struct with info for each event REC
-  [event_info_rec,event_info_proc_rec] = get_event_info_rec(parms); 
+  [event_info_rec,event_info_proc_rec,errcode] = get_event_info_rec(parms); 
+  if errcode, return; end;
   
   % switch buttons if necesary for REC 
-  [event_info_rec,~,parms.switch_flag] = rec_switch(event_info_rec,event_info_proc_rec,parms); 
-
+  [event_info_rec,~,parms.switch_flag,errcode] = rec_switch(event_info_rec,event_info_proc_rec,parms); 
+  if errcode, return; end;
+  
   % get behav data and write it to a csv 
-  behav = get_behavoral_data_rec(event_info_wm,event_info_rec,parms); 
-
- catch 
- 
-  % get behav data and write it to a csv
-  get_behavoral_data_rec_empty(parms); 
-  fprintf('%s: Empty behavioral file created \n',mfilename)
-  error('%s: Empty behavioral file created \n',mfilename)
-  
- end %try 
+  behav = get_behavioral_data_rec(event_info_wm,event_info_rec,parms); 
 else
-  
   % get behav data and write it to a csv
-  get_behavoral_data_rec_empty(parms); 
-  fprintf('%s: Empty behavioral file created due to error on n-back file \n',mfilename)
-  error('%: Empty behavioral file created due to error on n-back file \n',mfilename)
-  
-end %if errcode_nback 
+  get_behavioral_data_rec_empty(parms);
+  fprintf('%s: ERROR: empty behavioral file created due to error with n-back file\n',...
+    mfilename);
+  errcode = 1;
+end % if errcode_nback 
 
 return;
 
@@ -81,6 +87,7 @@ function parms = check_input(fnamewm,fnamerec,options)
     'outstem',[],[],...
     'switch_thresh',0.3,[0,0.5],...
     'forceflag',false,[false true],...
+    'verbose',true,[false true],...
     'errcode_nback',0,0:1,...
     ...
     'colnameswm', {'NARGUID','SessionDate','SessionTime','ExperimentName','ExperimentVersion',...
@@ -129,8 +136,12 @@ function parms = check_input(fnamewm,fnamerec,options)
   end;
   [~,fstem,~] = fileparts(parms.fnamerec);
   if isempty(parms.outstem)
-    %parms.outstem = fstem;
+    % remove spaces
     parms.outstem = regexprep(fstem,'\s.+','');
+    % remove quotes
+    parms.outstem = regexprep(parms.outstem,'''','');
+    % remove extra extension
+    parms.outstem = regexprep(parms.outstem,'\..+','');
   end;
 
 return;
@@ -153,19 +164,22 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [event_info_wm,event_info_proc_wm] = get_event_info_wm(parms)
+function [event_info_wm,event_info_proc_wm,errcode] = get_event_info_wm(parms)
   
-  event_info_wm=[]; event_info_proc_wm = []; 
+  event_info_wm=[]; event_info_proc_wm = [];
+  errcode = 0;
 
-  try 
+  try
     % write event info to file
-    fnamewm_csv = abcd_check_eprime_sprdsh(parms.fnamewm,parms.colnameswm,...
-      parms.fieldnameswm,parms.outdir,parms.forceflag);
+    fnamewm_csv = abcd_check_eprime_sprdsh(parms.fnamewm, parms.colnameswm,...
+           parms.fieldnameswm, parms.outdir, parms.forceflag, parms.verbose);
     event_info_wm = mmil_csv2struct(fnamewm_csv);
-  catch 
-    fprintf('%s: ERROR: Failed reading e-prime file (format issues) \n',mfilename);  
-    return; 
-  end 
+  catch me
+    fprintf('%s: ERROR: failed to read e-prime file (format issues)\n%s\n',...
+      mfilename,me.message);
+    errcode = 1;
+    return;
+  end
   
   % remove non-events
   all_types = {event_info_wm.block_type}; 
@@ -178,19 +192,22 @@ return;
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 
-function [event_info_rec,event_info_proc_rec] = get_event_info_rec(parms)
+function [event_info_rec,event_info_proc_rec,errcode] = get_event_info_rec(parms)
   
   event_info_rec = []; event_info_proc_rec = []; 
-
+  errcode = 0;
+  
   try 
     % write event info to file
-    fnamerec_csv = abcd_check_eprime_sprdsh(parms.fnamerec,parms.colnamesrec,...
-      parms.fieldnamesrec,parms.outdir,parms.forceflag);
+    fnamerec_csv = abcd_check_eprime_sprdsh(parms.fnamerec, parms.colnamesrec,...
+            parms.fieldnamesrec, parms.outdir, parms.forceflag, parms.verbose);
     event_info_rec = mmil_csv2struct(fnamerec_csv); 
-  catch 
-    fprintf('%s: ERROR: Failed reading e-prime file (format issues) \n',mfilename);  
+  catch me
+    fprintf('%s: ERROR: failed to read e-prime file (format issues)\n%s\n',...
+      mfilename,me.message);
+    errcode = 1;
     return;
-  end; 
+  end
   
   % remove non-events
   all_types = {event_info_rec.stim_type_block}; 
@@ -202,12 +219,12 @@ function [event_info_rec,event_info_proc_rec] = get_event_info_rec(parms)
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+function [event_info,event_info_proc,switch_flag,errcode] = rec_switch(event_info,event_info_proc,parms)
 
-function [event_info,event_info_proc,switch_flag] = rec_switch(event_info,event_info_proc,parms)
-  
-  [event_info, event_info_proc] = rec_switch_resp_format(event_info,event_info_proc); 
-  
-  [switch_flag,acc1,~] = rec_switch_flag(event_info,parms);  
+  [event_info, event_info_proc] = rec_switch_resp_format(event_info,event_info_proc,parms); 
+
+  [switch_flag,acc1,errcode] = rec_switch_flag(event_info,parms);  
+  if errcode, return; end;
    
   if switch_flag 
     [event_info, event_info_proc] = rec_switch_event(event_info,event_info_proc);
@@ -280,16 +297,16 @@ function [switch_flag,accuracy,errcode] = rec_switch_flag(event_info,parms)
       correct = correct+1;
     end;
   end;
-  accuracy = 100*correct/correct_total;  
-  fprintf('%s: accuracy = %0.1f%%\n',mfilename,accuracy);
+  accuracy = 100*correct/correct_total;
+  if parms.verbose, fprintf('%s: accuracy = %0.1f%%\n',mfilename,accuracy); end
 
   if accuracy == 0
-    error('%s: accuracy equals zero, probably format error \n',mfilename);
+    fprintf('%s: ERROR: accuracy equals zero, probably format error\n',mfilename);
     errcode = 1; 
     return; 
   elseif accuracy < 100*parms.switch_thresh
-    fprintf('%s: accuracy < %0.1f%%, switching button responses\n',...
-      mfilename,100*parms.switch_thresh);
+    if parms.verbose, fprintf('%s: accuracy < %0.1f%%, switching button responses\n',...
+                              mfilename,100*parms.switch_thresh); end
     switch_flag = 1;
   end;
   
@@ -297,15 +314,15 @@ return;
 
 
 
-function [event_info, event_info_proc] = rec_switch_resp_format(event_info,event_info_proc) 
+function [event_info, event_info_proc] = rec_switch_resp_format(event_info,event_info_proc,parms) 
 
   correct_resp = {event_info.stim_cresp_block};
   correct_resp_proc = {event_info_proc.stim_cresp_block};
   resp = {event_info.stim_resp_block}; 
-  resp_proc = {event_info_proc.stim_resp_block};  
+  resp_proc = {event_info_proc.stim_resp_block};
   
   if strcmp(correct_resp{1},'RIGHTARROW') || strcmp(correct_resp{1},'LEFTARROW')
-    fprintf('%s: switching response format \n',mfilename);
+    if parms.verbose, fprintf('%s: switching response format \n',mfilename); end
     for i=1:length(correct_resp)
       if strcmp(correct_resp{i},'RIGHTARROW') 
         event_info(i).stim_cresp_block = 1;
@@ -339,7 +356,7 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
-function behav = get_behavoral_data_rec(event_info_wm,event_info_rec,parms) 
+function behav = get_behavioral_data_rec(event_info_wm,event_info_rec,parms) 
   
   behav = []; 
   behav.('SubjID') = []; behav.('VisitID') = []; 
@@ -511,7 +528,7 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function get_behavoral_data_rec_empty(parms) 
+function get_behavioral_data_rec_empty(parms) 
   
   behav = []; 
   behav.('SubjID') = []; behav.('VisitID') = []; 

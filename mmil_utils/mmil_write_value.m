@@ -5,7 +5,8 @@ function mmil_write_value(fid,value)
 %   handles multiple data types, including vectors and cell arrays
 %
 % Created:  02/25/11 by Don Hagler
-% Last Mod: 10/07/13 by Don Hagler
+% Prev Mod: 10/07/13 by Don Hagler
+% Last Mod: 07/02/19 by Feng Xue
 %
 
 if isfloat(value)
@@ -24,7 +25,7 @@ if isfloat(value)
     end;
   end;
   if length(value)~=1, fprintf(fid,']'); end;
-elseif isnumeric(value) | islogical(value)
+elseif isnumeric(value) || islogical(value)
   if length(value)==1
     fprintf(fid,'%d',value);
   else

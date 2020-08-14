@@ -15,7 +15,8 @@ function fname = abcd_check_eprime_encoding(fname,outdir,forceflag)
 %     {default = 0}
 %
 % Created:  12/21/16 by Don Hagler
-% Last Mod: 01/06/17 by Don Hagler
+% Prev Mod: 01/06/17 by Don Hagler
+% Last Mod: 04/08/19 by Feng Xue
 %
 
 if ~mmil_check_nargs(nargin,1), return; end;
@@ -28,17 +29,17 @@ end;
 
 [fpath,fstem,fext] = fileparts(fname);
 
-cmd = sprintf('file %s',fname);
+cmd = sprintf('file "%s"',fname);
 [s,r] = unix(cmd);
 if s
-  error('cmd %s failed:\n%s',cmd,r);
+  error('cmd "%s" failed:\n%s',cmd,r);
 end;
 
 if ~isempty(regexp(r,'UTF-16'))
   fname_out = sprintf('%s/%s_ASCII%s',outdir,fstem,fext);
   if ~exist(fname_out,'file') || forceflag
     mmil_mkdir(outdir);
-    cmd = sprintf('iconv -f UTF-16 -t ASCII --output=%s %s',...
+    cmd = sprintf('iconv -f UTF-16 -t ASCII --output="%s" "%s"',...
       fname_out,fname);
     [s,r] = unix(cmd);
     if s

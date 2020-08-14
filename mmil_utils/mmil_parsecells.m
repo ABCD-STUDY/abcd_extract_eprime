@@ -16,8 +16,8 @@ function celldat = mmil_parsecells(celldat,rows,cols)
 % Output: cell matrix of numbers, strings, cell arrays, numeric arrays
 %
 % Created:  04/01/09 by Jason Sherfey
-% Prev Mod: 10/07/13 by Don Hagler
-% Last Mod: 01/30/18 by Don Hagler
+% Prev Mod: 01/30/18 by Don Hagler
+% Last Mod: 07/02/19 by Feng Xue
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -57,7 +57,7 @@ for i = 1:nr
       [dat status] = isnumarr(dat);
       if status, celldat = updatecell(celldat,i,j,dat); continue; end
       % do not convert to numeric if negative sign is not at beginning
-      if ~isempty(regexp(dat,'-')) && isempty(regexp(strtrim(dat),'^-')), continue; end;
+      if ~isempty(regexp(dat,'-','ONCE')) && isempty(regexp(strtrim(dat),'^-','ONCE')), continue; end;
       % convert to numeric if all characters are numbers, spaces, brackets, periods, or negative signs
       if length(regexp(dat,'[\d\s\[\].-]'))==length(dat) && ~isempty(str2num(dat))
         celldat = updatecell(celldat,i,j,str2num(dat));
@@ -78,7 +78,7 @@ for n = 1:length(val)
   [tmpval s] = isnumarr(val{n});
   if s==1, keep{end+1} = tmpval; continue; end
   if s==2, keep(end+1:end+length(tmpval)) = tmpval; continue; end
-  if isempty(regexp(val{n},'\w')), continue; end
+  if isempty(regexp(val{n},'\w','ONCE')), continue; end
   keep(end+1) = regexp(val{n},'[^'']+','match');
 end
 dat = keep;

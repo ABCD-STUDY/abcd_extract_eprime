@@ -1,5 +1,5 @@
-function [eprime_nruns,errcode] = abcd_extract_eprime_nback(fname,varargin)
-%function abcd_extract_eprime_nback(fname,[options])
+function [eprime_nruns,errcode,behav] = abcd_extract_eprime_nback(fname,varargin)
+%function [eprime_nruns,errcode,behav] = abcd_extract_eprime_nback(fname,[options])
 %
 % Purpose: extract condition time courses
 %   from eprime data files for NBACK task
@@ -32,14 +32,20 @@ function [eprime_nruns,errcode] = abcd_extract_eprime_nback(fname,varargin)
 %     {default = 0}
 %   'timing_files_flag': [0|1] generate timing files
 %     {default = 1}
+%   'verbose': [0|1] display messages
+%     {default = 1}
 %
 %  Output: 
 %    eprime_nruns: number of valid runs in the e-prime in the file  
-%    errcode: [0|1] whether the file was successfully processed  
+%    errcode: [0|1] whether the file was successfully processed
+%    behav: behavioral data
 %
 % Created : 01/06/17 by Jose Teruel 
-% Prev Mod: 04/03/18 by Dani Cornejo
-% Last Mod: 07/25/18 by Don Hagler
+% Prev Mod: 01/23/19 by Dani Cornejo
+% Prev Mod: 01/29/20 by Don Hagler
+% Prev Mod: 05/13/20 by Octavio Ruiz
+% Prev Mod: 05/14/20 by Don Hagler
+% Last Mod: 05/17/20 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -49,29 +55,34 @@ function [eprime_nruns,errcode] = abcd_extract_eprime_nback(fname,varargin)
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+% initialize outputs
+eprime_nruns = []; errcode = 0; behav = [];
+
 % check arguments 
 if ~mmil_check_nargs(nargin,1), return; end;
 
 % check input parameters
 parms = check_input(fname,varargin); 
-errcode = parms.errcode; 
 
 % create output directory
 mmil_mkdir(parms.outdir);
 
-try 
 % create struct with info for each event
-[event_info,event_info_proc,start_time,all_types,all_stims,all_targets,all_procs] = get_event_info(parms); 
+[event_info,event_info_proc,start_time,all_types,all_stims,all_targets,all_procs,errcode] = get_event_info(parms);
+if errcode, return; end;
 
 % switch buttons if necesary 
-[event_info,event_info_proc,parms.switch_flag] = nback_switch(event_info,event_info_proc,parms); 
+[event_info,event_info_proc,parms.switch_flag,errcode] = nback_switch(event_info,event_info_proc,parms); 
+if errcode, return; end;
 
 % get behav data and write it to a csv 
-[~,eprime_runs] = get_behavoral_data_nback(event_info,parms,start_time);  
+[behav,eprime_runs,errcode] = get_behavioral_data_nback(event_info,parms,start_time);
+if errcode, return; end;
+
 parms.eprime_runs = eprime_runs; 
 eprime_nruns = length(eprime_runs);
 parms.eprime_nruns = eprime_nruns; 
-fprintf('%s: number of e-prime runs = %d \n',mfilename,eprime_nruns);
+if parms.verbose, fprintf('%s: number of e-prime runs = %d \n',mfilename,eprime_nruns); end
 
 if parms.timing_files_flag && eprime_nruns 
   % write files for each condition
@@ -95,8 +106,9 @@ if parms.timing_files_flag && eprime_nruns
           ind_inter = intersect(ind_inter,ind_acc);
         end;
         % get times of stim onset and offset
-        onset = [event_info(ind_inter).stim_onset]; 
-        offset = [event_info(ind_inter).stim_offset];
+        onset = {event_info(ind_inter).stim_onset}; 
+        offset = {event_info(ind_inter).stim_offset};
+        [onset,offset] = check_offsets(onset,offset,eventname);
         % find most recent start time for each event
         [ind_start,event_ref_time] = set_ref(onset,start_time); 
         % create files for each scan
@@ -111,13 +123,14 @@ if parms.timing_files_flag && eprime_nruns
   for i=1:parms.ncues
     ind_cues = find(strcmp(parms.cues{i},all_procs));
     % onset of fixation block cue
-    onset = [onset event_info_proc(ind_cues).cuefix_onset];
-    % offset of fixation block cue
-    % offset = [offset event_info_proc(ind_cues).cuefix_offset];
-    % onset of stimulus block cue
-    % onset = [onset event_info_proc(ind_cues).([parms.cuenames{i} '_onset'])];
+    tmp_onset = {event_info_proc(ind_cues).cuefix_onset};
     % offset of stimulus block cue
-    offset = [offset event_info_proc(ind_cues).([parms.cuenames{i} '_offset'])];
+    tmp_offset = {event_info_proc(ind_cues).([parms.cuenames{i} '_offset'])};
+    % check for empty onset/offset values
+    [tmp_onset,tmp_offset] = check_offsets(tmp_onset,tmp_offset,eventname);
+    % concatenate with other cue trials    
+    onset = [onset tmp_onset];
+    offset = [offset tmp_offset];
   end
   % sort onset and offset times
   onset = sort(onset); offset = sort(offset);  
@@ -128,15 +141,6 @@ if parms.timing_files_flag && eprime_nruns
 
 end %timing_files_flag
 
-catch 
-  
-  % get behav data and write it to a csv
-  get_behavioral_data_nback_empty(parms); 
-  parms.eprime_nruns=0; eprime_nruns=parms.eprime_nruns; 
-  parms.errcode=1; errcode=parms.errcode; 
-  fprintf('%s: Empty behavioral file created \n',mfilename)
-  
-end %try 
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -156,22 +160,22 @@ function parms = check_input(fname,options)
     'extra_flag',false,[false true],...
     'forceflag',false,[false true],...
     'timing_files_flag',true,[false true],...
+    'verbose',true,[false true],...
     'eprime_runs',1:2,[],...
     'eprime_nruns',0,0:2,...
-    'errcode',0,0:1,...
     ...
     'colnames',  {'NARGUID','SessionDate','SessionTime','ExperimentName','ExperimentVersion',...
                   'Procedure[Block]','BlockType','StimType','Stim.OnsetTime','Stim.OffsetTime','Stim.ACC',...
                   'Cue2Back.OnsetTime','Cue2Back.OffsetTime','CueTarget.OnsetTime','CueTarget.OffsetTime',...
                   'CueFix.OnsetTime','CueFix.OffsetTime','CueFix.StartTime',...
                   'Fix15sec.OnsetTime', 'Fix15sec.OffsetTime','TargetType','Stim.RT',...
-                  'CorrectResponse','Stim.RESP'},[],...
+                  'CorrectResponse','Stim.RESP', 'Stimulus'},[],...
     'fieldnames',{'narguid','date','time','experiment','version',...
                   'procedure_block','block_type','stim_type','stim_onset','stim_offset','stim_acc',...
                   'cue2back_onset','cue2back_offset','cue0back_onset','cue0back_offset',...
                   'cuefix_onset','cuefix_offset','cuefix_start',...
                   'fixation_onset', 'fixation_offset','target_type','stim_rt',...
-                  'correct_response','stim_resp'},[],...
+                  'correct_response','stim_resp', 'stim'},[],...
     'typenames',{'2-Back','0-Back'},[],...
     'condnames',{'2_back','0_back'},[],...
     'stimnames',{'posface','neutface','negface','place'},[],...
@@ -205,8 +209,12 @@ function parms = check_input(fname,options)
   end;
   [fdir,fstem,fext] = fileparts(parms.fname);
   if isempty(parms.outstem)
-    %parms.outstem = fstem;
+    % remove spaces
     parms.outstem = regexprep(fstem,'\s.+','');
+    % remove quotes
+    parms.outstem = regexprep(parms.outstem,'''','');
+    % remove extra extension
+    parms.outstem = regexprep(parms.outstem,'\..+','');
   end;
   % calculate time at the end of each TR
   parms.TR_offset = linspace(parms.TR,parms.numTRs * parms.TR,parms.numTRs);
@@ -226,6 +234,21 @@ function [ind_start,event_ref_time] = set_ref(onset,start_time)
     ind_start = start_time;
     event_ref_time = 0;
   end;
+return;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+function [onset,offset] = check_offsets(onset,offset,eventname)
+  ind_empty = find(cellfun(@isempty,onset) | cellfun(@isempty,offset));
+  if ~isempty(ind_empty)
+    fprintf('%s: WARNING: %s event has %d onsets but %d offsets\n',...
+      mfilename,eventname,nnz(~cellfun(@isempty,onset)),nnz(~cellfun(@isempty,offset)));
+    ind_keep = setdiff([1:length(onset)],ind_empty);
+    onset = onset(ind_keep);
+    offset = offset(ind_keep);
+  end;
+  onset = cell2mat(onset);
+  offset = cell2mat(offset);
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -344,18 +367,21 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [event_info,event_info_proc,start_time,all_types,all_stims,all_targets,all_procs] = get_event_info(parms)
+function [event_info,event_info_proc,start_time,all_types,all_stims,all_targets,all_procs,errcode] = get_event_info(parms)
   
   event_info=[]; event_info_proc = []; start_time=[];
   all_types=[]; all_stims = []; all_targets = []; all_procs = [];
+  errcode = 0;
   
-  try 
+  try
     % write event info to file
-    fname_csv = abcd_check_eprime_sprdsh(parms.fname,parms.colnames,...
-      parms.fieldnames,parms.outdir,parms.forceflag);  
+    fname_csv = abcd_check_eprime_sprdsh(parms.fname, parms.colnames,...
+                  parms.fieldnames, parms.outdir, parms.forceflag, parms.verbose);
     event_info = mmil_csv2struct(fname_csv);
-  catch 
-    fprintf('%s: ERROR: Failed reading e-prime file (format issues) \n',mfilename);  
+  catch me
+    fprintf('%s: ERROR: failed to read e-prime file (format issues)\n%s\n',...
+      mfilename,me.message);
+    errcode = 1;
     return; 
   end
   
@@ -366,7 +392,9 @@ function [event_info,event_info_proc,start_time,all_types,all_stims,all_targets,
     proc = parms.procedures{i};
     ind_proc = find(strcmp(proc,all_procs));
     if ~isempty(ind_proc)
-      ind_start(i) = ind_proc(end) + 1;
+      if ind_proc(end)<length(event_info)
+        ind_start(i) = ind_proc(end) + 1;
+      end;
     end;
   end;
   start_time = [event_info(ind_start).cuefix_start];  
@@ -380,64 +408,81 @@ function [event_info,event_info_proc,start_time,all_types,all_stims,all_targets,
   all_stims = {event_info.stim_type};
   all_targets = {event_info.target_type};
 
-  return;
+  % check corect_response
+  if any(cellfun(@isstr,{event_info.correct_response}))
+    if parms.verbose
+      fprintf('%s: WARNING: replacing correct_response strings with numeric\n',...
+        mfilename);
+    end;
+    for i=1:length(event_info)
+      if isstr(event_info(i).correct_response)
+        % remove text description of response
+        event_info(i).correct_response = str2num(regexprep(event_info(i).correct_response,',.+',''));
+      end;
+    end;
+  end;
+  
+return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [event_info,event_info_proc,switch_flag] = nback_switch(event_info,event_info_proc,parms)
-  
- [switch_flag,acc1,~] = nback_switch_flag(event_info,parms); 
+function [event_info,event_info_proc,switch_flag,errcode] = nback_switch(event_info,event_info_proc,parms)
 
- if switch_flag 
-   [event_info, event_info_proc] = nback_switch_event(event_info,event_info_proc);
-   [~,acc2,~] = nback_switch_flag(event_info,parms);
-   if acc2 < acc1
-     [event_info, event_info_proc] = nback_switch_event(event_info,event_info_proc);
+  [switch_flag,acc1,errcode] = nback_switch_flag(event_info,parms); 
+  if errcode, return; end;
+
+  if switch_flag 
+    [event_info,event_info_proc] = nback_switch_event(event_info,event_info_proc);
+    [~,acc2,~] = nback_switch_flag(event_info,parms);
+    if acc2 < acc1
+      [event_info, event_info_proc] = nback_switch_event(event_info,event_info_proc);
       switch_flag = 0; 
-   end 
- end
+    end 
+  end
  
- % write to csv
- if switch_flag 
-   fname_csv_out  = sprintf('%s/%s_events_switched.csv',...
-        parms.outdir,parms.outstem); 
-   if ~exist(fname_csv_out,'file') || parms.forceflag
-     mmil_struct2csv(event_info_proc,fname_csv_out);
-   end; 
- end  
+  % write to csv
+  if switch_flag 
+    fname_csv_out  = sprintf('%s/%s_events_switched.csv',...
+          parms.outdir,parms.outstem); 
+    if ~exist(fname_csv_out,'file') || parms.forceflag
+      mmil_struct2csv(event_info_proc,fname_csv_out);
+    end; 
+  end  
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
 function [switch_flag,accuracy,errcode] = nback_switch_flag(event_info,parms) 
-
   errcode = 0;
   switch_flag = 0;
 
-  correct_resp = {event_info.stim_resp}; 
+  correct_resp = {event_info.stim_resp};
   correct_total = size(cell2mat({event_info.correct_response}),2); 
+
   resp = {event_info.correct_response}; 
-  correct = 0;  
+  correct = 0;
   for i=1:correct_total
+    if isstr(resp{i})
+      % remove text description of response
+      resp{i} = str2num(regexprep(resp{i},',.+',''));
+    end;
     if correct_resp{i}==resp{i}
       correct = correct+1;
     end;
   end;
   accuracy = 100*correct/correct_total; 
-  fprintf('%s: accuracy = %0.1f%%\n',mfilename,accuracy);  
+  if parms.verbose, fprintf('%s: accuracy = %0.1f%%\n',mfilename,accuracy); end
 
   if accuracy == 0
-    error('%s: accuracy equals zero, probably format error \n',mfilename);
+    fprintf('%s: ERROR: accuracy equals zero, probably format error\n',mfilename);
     errcode = 1; 
     return; 
   elseif accuracy < 100*parms.switch_thresh
-    fprintf('%s: accuracy < %0.1f%%, switching button responses\n',...
-      mfilename,100*parms.switch_thresh);
+    if parms.verbose, fprintf('%s: accuracy < %0.1f%%, switching button responses\n',...
+      mfilename,100*parms.switch_thresh); end
     switch_flag = 1;
   end;
- 
 return 
-
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
@@ -474,7 +519,8 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
-function [behav, runs_ok] = get_behavoral_data_nback(event_info,parms,start_time) 
+function [behav,runs_ok,errcode] = get_behavioral_data_nback(event_info,parms,start_time) 
+  errcode = 0;
   
   behav = []; 
   behav.('SubjID') = []; behav.('VisitID') = []; 
@@ -489,20 +535,21 @@ function [behav, runs_ok] = get_behavoral_data_nback(event_info,parms,start_time
   runs_ok = []; 
   for i=1:nruns
     run_len = length(find(runs==i));   
-    if run_len == 80 %hardcode the run lenght for now
-     runs_ok = [runs_ok i];  
+    if run_len == 80 % hardcode the run length for now
+      runs_ok = [runs_ok i];  
     else 
-     fprintf('%s: run %d is short: %d trials found (<80 trials) \n',mfilename,i,run_len);
+      if parms.verbose, fprintf('%s: run %d is short: %d trials found (<80 trials) \n',mfilename,i,run_len); end
     end 
   end
   nruns = length(runs_ok);  
   if nruns == 1
-   new_info = find(runs==runs_ok);
-   event_info = event_info(new_info);
-   ind_start = ind_start(new_info); 
+    new_info = find(runs==runs_ok);
+    event_info = event_info(new_info);
+    ind_start = ind_start(new_info); 
   elseif nruns == 0
-   fprintf('%s: ERROR: no valid e-prime runs \n',mfilename);
-   error('%s: ERROR: no valid e-prime runs \n',mfilename); 
+    fprintf('%s: ERROR: no valid e-prime runs \n',mfilename);
+    errcode = 1;
+    return;
   end  
   behav.nruns = nruns; 
   
@@ -734,7 +781,7 @@ function [behav, runs_ok] = get_behavoral_data_nback(event_info,parms,start_time
   % performace
   if (behav.block_2_back_total_acc <= 0.6) || ... 
     (behav.block_0_back_total_acc <= 0.6)
-    fprintf('%s: block_2_back_total_acc or block_0_back_total_acc <= 0.6 \n',mfilename); 
+    if parms.verbose, fprintf('%s: block_2_back_total_acc or block_0_back_total_acc <= 0.6 \n',mfilename); end
     behav.perform_flag = 0; 
   end 
   
