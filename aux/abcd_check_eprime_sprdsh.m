@@ -1,5 +1,5 @@
-function fname_csv = abcd_check_eprime_sprdsh(fname,cols,fields,outdir,forceflag,verbose)
-%function fname = abcd_check_eprime_sprdsh(fname,[cols],[fields],[outdir],[forceflag])
+function fname_out = abcd_check_eprime_sprdsh(fname,cols,fields,outdir,forceflag,verbose)
+%function fname_out = abcd_check_eprime_sprdsh(fname,[cols],[fields],[outdir],[forceflag],[verbose])
 %
 % Purpose: Reads an ASCII file containing an E-Prime spreadsheet. 
 %          Extract contents while fixing encoding and format issues. 
@@ -25,16 +25,17 @@ function fname_csv = abcd_check_eprime_sprdsh(fname,cols,fields,outdir,forceflag
 %   'verbose': [0|1] display messages
 %     {default = 1}
 %
-% Based on abcd_check_eprime_encoding.m
-% Created:  12/21/16 by Don Hagler
-% Last Mod: 01/06/17 by Don Hagler
-%
 % Created:  11/02/17 by Dani Cornejo
 % Prev Mod: 01/23/19 by Dani Cornejo
 % Prev Mod: 01/14/20 by Octavio Ruiz
-% Last Mod: 04/13/20 by Don Hagler
-% Last Mod: 04/14/20 by Don Hagler
+% Prev Mod: 07/02/20 by Don Hagler
+% Prev Mod: 08/28/20 by Don Hagler
+% Last Mod: 11/01/20 by Don Hagler
 %
+
+% Based on abcd_check_eprime_encoding.m
+% Created:  12/21/16 by Don Hagler
+% Last Mod: 01/06/17 by Don Hagler
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -49,9 +50,7 @@ if ~exist(fname,'file')
   error('file %s not found',fname);
 end;
 
-%python_flag = check_python;
-python_flag = 0; %% NOTE: disabled python version of eprime csv reading
-                 %%       to simplify setup (remove need to configure python)
+python_flag = check_python;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -59,32 +58,27 @@ if ~exist(fname,'file')
   error('file %s not found',fname);
 end;
 
-fname_clean = fname;
-fname_clean = regexprep(fname_clean,'(','\\(');
-fname_clean = regexprep(fname_clean,')','\\)');
-fname_clean = regexprep(fname_clean,' ','\\ ');
-
 [~,fstem,~] = fileparts(fname);
-fstem_clean = regexprep(fstem,'\s.+','');
+fstem_clean = abcd_clean_fstem(fstem);
 
 % write event info to file
-fname_csv = sprintf('%s/%s_events.csv',outdir,fstem_clean);
+fname_out = sprintf('%s/%s_events.csv',outdir,fstem_clean);
 
-if ~exist(fname_csv,'file') || forceflag
+if ~exist(fname_out,'file') || forceflag
   if python_flag
-    % Find, read, intrepret eprime file, and write contents to specified's name file
-    % If the operation is succesful, this file will be read below.
+    % find, read, intrepret eprime file, and write contents to specified's name file
+    % if the operation is succesful, this file will be read below
     if verbose, fprintf('%s: reading e-prime file using Python...\n',mfilename); end
     diagnos = -256;
-    fname_ck = sprintf('%s/%s_checked.txt',outdir,fstem_clean); 
-    %%  NOTE: this will not work if $MMPS_DIR is not set (and python3 needs to be configured too)
-    cmd = sprintf('python3 $MMPS_DIR/python/eprime_sprdsht_get.py %s ExportFile %s', fname_clean, fname_ck);
+    fname_ck = sprintf('%s/%s_checked.txt',outdir,fstem_clean);
+    cmd = sprintf('python3 $MMPS_DIR/python/eprime_sprdsht_get.py %s ExportFile %s',...
+      clean_fname(fname),clean_fname(fname_ck));
 
     [status, cmdout] = mmil_unix(cmd);
 
     if status == 0
-      % Check if input file was found and interpreted; and get diagnostic variable,
-      % located at the beginning of the returned string (Octavio, 2020jan14)
+      % check if input file was found and interpreted; and get diagnostic variable,
+      %   located at the beginning of the returned string (Octavio, 2020jan14)
       try
         [var, moreinfo] = strtok(cmdout, ',');
         diagnos = str2double( strtrim(var) );
@@ -92,7 +86,7 @@ if ~exist(fname_csv,'file') || forceflag
         python_flag = 0;
       end
     else
-      if verbose, fprintf('%s: WARNING: python cmd %s failed:\n%.0f\n%s',mfilename,cmd,status,cmdout); end
+      if verbose, fprintf('%s: WARNING: python cmd %s failed:\n%s\n',mfilename,cmd,cmdout); end
       python_flag = 0;
     end
     
@@ -100,11 +94,9 @@ if ~exist(fname_csv,'file') || forceflag
       ; % The eprime file was succesfully read, translated, and a copy was rewritten
     else
       if verbose, fprintf('%s: WARNING: eprime_sprdsht_get.py: unable to find, read, intrepret, or write file\n', mfilename); end
-%keyboard
       python_flag = 0;
     end
   end
-  % - - - - - - - - - - - - - - - - - - - - - - - - - - - :Octavio (2019jul22)
 
   if ~python_flag
     if verbose, fprintf('%s: reading e-prime file...\n',mfilename); end
@@ -139,13 +131,13 @@ if ~exist(fname_csv,'file') || forceflag
     % write to csv
     if isempty(B)
       if verbose, fprintf('%s: WARNING: failed to read events\n',mfilename); end
-      fname_csv = [];
+      fname_out = [];
       return;
     end;
-    mmil_write_csv(fname_csv,B);
+    mmil_write_csv(fname_out,B);
   else
     if verbose, fprintf('%s: WARNING: column names and/or fields empty: no event file \n',mfilename); end
-    fname_csv = []; 
+    fname_out = []; 
   end
 end
 
@@ -156,10 +148,24 @@ return;
 function python_flag = check_python()
   python_flag = 0;
   cmd = 'which python3';
-  [s,r] = unix(cmd);
-  if ~s && isempty(regexp(r,'not found'))
+  [status,result,errmsg] = jsystem(cmd);
+  if ~status && isempty(regexp(result,'not found')) && isempty(regexp(errmsg,'not found'))
     python_flag = 1;
   end;
 return; 
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% add escape characters to file name for shell commands
+function fname_clean = clean_fname(fname)
+  fname_clean = fname;
+  % add escape character before parentheses
+  fname_clean = regexprep(fname_clean,'(','\\(');
+  fname_clean = regexprep(fname_clean,')','\\)');
+  % add escape character before spaces
+  fname_clean = regexprep(fname_clean,' ','\\ ');
+  % add escape character before &
+  fname_clean = regexprep(fname_clean,'&','\\&');
+return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
