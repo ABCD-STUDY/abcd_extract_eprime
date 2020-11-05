@@ -1,5 +1,5 @@
-function [errcode,behav] = abcd_extract_eprime_rec(fnamewm,fnamerec,varargin)
-%function [errcode,behav] = abcd_extract_eprime_rec(fnamewm,fnamerec,[options])
+function [errcode,behav,errmsg] = abcd_extract_eprime_rec(fnamewm,fnamerec,varargin)
+%function [errcode,behav,errmsg] = abcd_extract_eprime_rec(fnamewm,fnamerec,[options])
 %
 % Purpose: generate behav data for n-back REC files 
 %
@@ -21,14 +21,15 @@ function [errcode,behav] = abcd_extract_eprime_rec(fnamewm,fnamerec,varargin)
 %     {default = 1}
 %
 % Output: 
+%    errcode: [0|1] whether the file was successfully processed
 %    behav: behavioral data
+%    errmsg: string describing error if errcode=1
 %
 % Created : 11/16/17 by Dani Cornejo 
 % Prev Mod: 01/23/19 by Dani Cornejo
-% Prev Mod: 05/13/20 by Octavio Ruiz
-% Prev Mod: 05/14/20 by Don Hagler
-% Prev Mod: 05/17/20 by Don Hagler
-% Last Mod: 05/21/20 by Octavio Ruiz
+% Prev Mod: 05/21/20 by Octavio Ruiz
+% Prev Mod: 08/28/20 by Don Hagler
+% Last Mod: 11/03/20 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -40,7 +41,7 @@ function [errcode,behav] = abcd_extract_eprime_rec(fnamewm,fnamerec,varargin)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % initialize outputs
-errcode = 0; behav = [];
+errcode = 0; behav = []; errmsg = [];
 
 % check arguments 
 if ~mmil_check_nargs(nargin,2), return; end;
@@ -53,15 +54,15 @@ mmil_mkdir(parms.outdir);
 
 if ~parms.errcode_nback 
   % create struct with info for each event in WM
-  [event_info_wm,event_info_proc_wm,errcode] = get_event_info_wm(parms);
+  [event_info_wm,event_info_proc_wm,errcode,errmsg] = get_event_info_wm(parms);
   if errcode, return; end;
  
   % create struct with info for each event REC
-  [event_info_rec,event_info_proc_rec,errcode] = get_event_info_rec(parms); 
+  [event_info_rec,event_info_proc_rec,errcode,errmsg] = get_event_info_rec(parms); 
   if errcode, return; end;
   
   % switch buttons if necesary for REC 
-  [event_info_rec,~,parms.switch_flag,errcode] = rec_switch(event_info_rec,event_info_proc_rec,parms); 
+  [event_info_rec,~,parms.switch_flag,errcode,errmsg] = rec_switch(event_info_rec,event_info_proc_rec,parms); 
   if errcode, return; end;
   
   % get behav data and write it to a csv 
@@ -69,9 +70,10 @@ if ~parms.errcode_nback
 else
   % get behav data and write it to a csv
   get_behavioral_data_rec_empty(parms);
-  fprintf('%s: ERROR: empty behavioral file created due to error with n-back file\n',...
-    mfilename);
+  fprintf('%s: ERROR: empty behavioral file created due to error with n-back file %s\n',...
+    mfilename,parms.fnamewm);
   errcode = 1;
+  errmsg = 'error with n-back file';
 end % if errcode_nback 
 
 return;
@@ -135,15 +137,10 @@ function parms = check_input(fnamewm,fnamerec,options)
     error('%s: file %s not found',mfilename,parms.fnamerec);
   end;
   [~,fstem,~] = fileparts(parms.fnamerec);
+  % remove problematic characters
   if isempty(parms.outstem)
-    % remove spaces
-    parms.outstem = regexprep(fstem,'\s.+','');
-    % remove quotes
-    parms.outstem = regexprep(parms.outstem,'''','');
-    % remove extra extension
-    parms.outstem = regexprep(parms.outstem,'\..+','');
+    parms.outstem = abcd_clean_fstem(fstem);
   end;
-
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -164,10 +161,10 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [event_info_wm,event_info_proc_wm,errcode] = get_event_info_wm(parms)
+function [event_info_wm,event_info_proc_wm,errcode,errmsg] = get_event_info_wm(parms)
   
   event_info_wm=[]; event_info_proc_wm = [];
-  errcode = 0;
+  errcode = 0; errmsg = [];
 
   try
     % write event info to file
@@ -175,9 +172,10 @@ function [event_info_wm,event_info_proc_wm,errcode] = get_event_info_wm(parms)
            parms.fieldnameswm, parms.outdir, parms.forceflag, parms.verbose);
     event_info_wm = mmil_csv2struct(fnamewm_csv);
   catch me
-    fprintf('%s: ERROR: failed to read e-prime file (format issues)\n%s\n',...
-      mfilename,me.message);
+    fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
+      mfilename,parms.fnamewm,me.message);
     errcode = 1;
+    errmsg = 'failed to read e-prime file';
     return;
   end
   
@@ -192,10 +190,10 @@ return;
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 
-function [event_info_rec,event_info_proc_rec,errcode] = get_event_info_rec(parms)
+function [event_info_rec,event_info_proc_rec,errcode,errmsg] = get_event_info_rec(parms)
   
   event_info_rec = []; event_info_proc_rec = []; 
-  errcode = 0;
+  errcode = 0; errmsg = [];
   
   try 
     % write event info to file
@@ -203,11 +201,24 @@ function [event_info_rec,event_info_proc_rec,errcode] = get_event_info_rec(parms
             parms.fieldnamesrec, parms.outdir, parms.forceflag, parms.verbose);
     event_info_rec = mmil_csv2struct(fnamerec_csv); 
   catch me
-    fprintf('%s: ERROR: failed to read e-prime file (format issues)\n%s\n',...
-      mfilename,me.message);
+    fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
+      mfilename,parms.fnamerec,me.message);
     errcode = 1;
+    errmsg = 'failed to read e-prime file';
     return;
   end
+  
+  % check experiment
+  experiment = mmil_getfield(event_info_rec(1),'experiment');
+  if isempty(regexpi(experiment,'rec'))
+    fprintf('%s: ERROR: wrong experiment name in e-prime file %s: %s\n',...
+      mfilename,parms.fnamerec,experiment);
+    errcode = 1;
+    errmsg = 'wrong experiment name';
+    return;
+  else
+    fprintf('%s: experiment name: %s\n',mfilename,experiment);
+  end;
   
   % remove non-events
   all_types = {event_info_rec.stim_type_block}; 
@@ -215,15 +226,15 @@ function [event_info_rec,event_info_proc_rec,errcode] = get_event_info_rec(parms
   event_info_proc_rec = event_info_rec;
   event_info_rec = event_info_rec(ind_events);
 
-  return;
+return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [event_info,event_info_proc,switch_flag,errcode] = rec_switch(event_info,event_info_proc,parms)
+function [event_info,event_info_proc,switch_flag,errcode,errmsg] = rec_switch(event_info,event_info_proc,parms)
 
   [event_info, event_info_proc] = rec_switch_resp_format(event_info,event_info_proc,parms); 
 
-  [switch_flag,acc1,errcode] = rec_switch_flag(event_info,parms);  
+  [switch_flag,acc1,errcode,errmsg] = rec_switch_flag(event_info,parms);  
   if errcode, return; end;
    
   if switch_flag 
@@ -244,8 +255,7 @@ function [event_info,event_info_proc,switch_flag,errcode] = rec_switch(event_inf
     end
   end 
   
-  return;
-
+return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
@@ -280,12 +290,11 @@ function [event_info, event_info_proc] = rec_switch_event(event_info,event_info_
   
 return; 
 
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
-function [switch_flag,accuracy,errcode] = rec_switch_flag(event_info,parms) 
+function [switch_flag,accuracy,errcode,errmsg] = rec_switch_flag(event_info,parms) 
   
-  errcode = 0; 
+  errcode = 0; errmsg = [];
   switch_flag = 0; 
   correct_resp = {event_info.stim_cresp_block};
   resp = {event_info.stim_resp_block}; 
@@ -301,8 +310,9 @@ function [switch_flag,accuracy,errcode] = rec_switch_flag(event_info,parms)
   if parms.verbose, fprintf('%s: accuracy = %0.1f%%\n',mfilename,accuracy); end
 
   if accuracy == 0
-    fprintf('%s: ERROR: accuracy equals zero, probably format error\n',mfilename);
-    errcode = 1; 
+    fprintf('%s: ERROR: accuracy equals zero for %s\n',mfilename,parms.fnamerec);
+    errcode = 1;
+    errmsg = 'accuracy equals zero';
     return; 
   elseif accuracy < 100*parms.switch_thresh
     if parms.verbose, fprintf('%s: accuracy < %0.1f%%, switching button responses\n',...
@@ -312,7 +322,7 @@ function [switch_flag,accuracy,errcode] = rec_switch_flag(event_info,parms)
   
 return; 
 
-
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
 function [event_info, event_info_proc] = rec_switch_resp_format(event_info,event_info_proc,parms) 
 
@@ -374,34 +384,40 @@ function behav = get_behavioral_data_rec(event_info_wm,event_info_rec,parms)
     cond = parms.condnames{i}; 
     ind_type = find(strcmp(type,all_types_wm));
     
-     for j=1:parms.nstims
-       stim = parms.stimnames{j}; 
-       ind_stim = find(strcmp(stim,lower(all_stims_wm)));
+    for j=1:parms.nstims
+      stim = parms.stimnames{j}; 
+      ind_stim = find(strcmp(stim,lower(all_stims_wm)));
+    
+      for k=1:parms.nextrastims
+        extra = parms.extra_stimnames{k};
+        ind_extra = find(strcmp(extra,lower(all_targets_wm))); 
+        eventname = sprintf('block_%s_%s_%s',cond,stim,extra); 
+        ind = intersect(intersect(ind_type,ind_stim),ind_extra);
+        pics = unique(all_pics_wm(ind));  
       
-       for k=1:parms.nextrastims
-         extra = parms.extra_stimnames{k};
-         ind_extra = find(strcmp(extra,lower(all_targets_wm))); 
-         eventname = sprintf('block_%s_%s_%s',cond,stim,extra); 
-         ind = intersect(intersect(ind_type,ind_stim),ind_extra);
-         pics = unique(all_pics_wm(ind));  
-        
-         if strcmp(extra,'nonlure')
+        if strcmp(extra,'nonlure')
           pics_1 = unique(all_pics_wm(ind));
           event_lure = sprintf('block_%s_%s_%s',cond,stim,'lure');
           pics_2 = pictures.(event_lure);
           pics = setdiff(pics_1,pics_2);
           pictures.(eventname)= pics; 
-         else
+        else
           pictures.(eventname)= pics;   
-         end    
-       end 
+        end    
       end 
+    end 
   end %ncond 
    
-  all_rec_types =  {event_info_rec.stim_type_block}; 
-  all_stim_acc = [event_info_rec.stim_acc_block]; 
+  all_rec_types = {event_info_rec.stim_type_block};
+  all_stim_acc = {event_info_rec.stim_acc_block};
   all_rec_pics = {event_info_rec.stim_block};
   
+  % exclude events with empty acc
+  i_valid = find(~cellfun(@isempty,all_stim_acc));
+  all_rec_types = all_rec_types(i_valid);
+  all_stim_acc = cell2mat(all_stim_acc(i_valid));
+  all_rec_pics = all_rec_pics(i_valid);
+
   for l=1:parms.nrec
     rectype = parms.recnames{l};
     ind_type_rec = find(strcmp(rectype,all_rec_types)); 
@@ -436,54 +452,6 @@ function behav = get_behavioral_data_rec(event_info_wm,event_info_rec,parms)
         eventname = sprintf('%s_%s_fa',rectype,cond);
         behav.(eventname) =  1-mean(event_acc_cond);
       end 
-      
-      %for k=1:parms.nextrastims
-      %  extra = parms.extra_stimnames{k};
-      %  event_pics_extra = []; event_acc_extra = []; 
-      %  for j=1:length(event_pics)
-      %    found_stim = find_field(pictures,event_pics(j),extra); 
-      %    if found_stim 
-      %      event_pics_extra = [event_pics_extra event_pics(j)]; 
-      %      event_acc_extra = [event_acc_extra event_acc(j)]; 
-      %    end 
-      %  end
-      %  eventname = sprintf('%s_%s_acc',rectype,extra);  
-      %  behav.(eventname) = event_acc_extra; 
-      %  eventname = sprintf('%s_%s_pic',rectype,extra);  
-      %  %behav.(eventname) = event_pics_extra; 
-      %  eventname = sprintf('%s_%s_hr',rectype,extra);  
-      %  behav.(eventname) =  mean(event_acc_extra);
-      %  eventname = sprintf('%s_%s_fa',rectype,extra);  
-      %  behav.(eventname) = 1-mean(event_acc_extra);  
-      %end
-      
-      %normalized 
-      %eventname_target = sprintf('%s_%s_acc',rectype,'target'); 
-      %target_acc = behav.(eventname_target); 
-      %target_len = length(target_acc);
-      %for k=1:parms.nextrastims
-      %  extra = parms.extra_stimnames{k}; 
-      %  if strfind(extra,'target')
-      %    eventname = sprintf('%s_%s_hr_norm',rectype,extra);  
-      %    behav.(eventname) = mean(target_acc);
-      %    eventname = sprintf('%s_%s_fa_norm',rectype,extra);
-      %    behav.(eventname) = 1-mean(target_acc);
-      %  else
-      %    eventname_nontarget =  sprintf('%s_%s_acc',rectype,extra);
-      %    nontarget_acc = behav.(eventname_nontarget);
-      %    nontarget_len = length(nontarget_acc);
-      %    nontarget_chosen = nontarget_acc(randi(nontarget_len,[target_len,1])); 
-      %    eventname = sprintf('%s_%s_hr_norm',rectype,extra);
-      %    behav.(eventname) = mean(nontarget_chosen);
-      %   eventname = sprintf('%s_%s_fa_norm',rectype,extra);
-      %    behav.(eventname) = 1-mean(nontarget_chosen);           
-      %  end
-      %end
-      %for k=1:parms.nextrastims
-      %  extra = parms.extra_stimnames{k};
-      %  eventname = sprintf('%s_%s_acc',rectype,extra);  
-      %  behav = rmfield(behav,eventname);  
-      %end       
     end %if_old
   end
   

@@ -1,5 +1,5 @@
-function [eprime_nruns,errcode,behav] = abcd_extract_eprime_mid(fname,varargin)
-%function [eprime_nruns,errcode,behav] = abcd_extract_eprime_mid(fname,[options])
+function [eprime_nruns,errcode,behav,errmsg] = abcd_extract_eprime_mid(fname,varargin)
+%function [eprime_nruns,errcode,behav,errmsg] = abcd_extract_eprime_mid(fname,[options])
 %
 % Purpose: extract condition time courses
 %   from eprime data files for MID task
@@ -32,12 +32,13 @@ function [eprime_nruns,errcode,behav] = abcd_extract_eprime_mid(fname,varargin)
 %    eprime_nruns: number of valid runs in the e-prime in the file  
 %    errcode: [0|1] whether the file was successfully processed
 %    behav: behavioral data
+%    errmsg: string describing error if errcode=1
 %
 % Created:  10/07/16 by Don Hagler
 % Prev Mod: 01/23/19 by Dani Cornejo
 % Prev Mod: 08/05/19 by Octavio Ruiz
-% Prev Mod: 08/05/19 by Don Hagler
-% Last Mod: 05/17/20 by Don Hagler
+% Prev Mod: 07/20/20 by Don Hagler
+% Last Mod: 11/03/20 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -48,7 +49,7 @@ function [eprime_nruns,errcode,behav] = abcd_extract_eprime_mid(fname,varargin)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % initialize outputs
-eprime_nruns = []; errcode = 0; behav = [];
+eprime_nruns = []; errcode = 0; behav = []; errmsg = [];
 
 % check arguments 
 if ~mmil_check_nargs(nargin,1), return; end;
@@ -60,12 +61,12 @@ parms = check_input(fname,varargin);
 mmil_mkdir(parms.outdir);
 
 % create struct with info for each event
-[event_info,start_time,all_types,errcode] = get_event_info(parms);  
+[event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms);  
 if errcode, return; end;
 
 % get behavioral data and write it to a csv
 %   also we will return this table to the calling program 
-[behav,eprime_runs,errcode] = get_behavioral_data(event_info,parms,all_types);
+[behav,eprime_runs,errcode,errmsg] = get_behavioral_data(event_info,parms,all_types);
 if errcode, return; end;
 
 parms.eprime_runs = eprime_runs; 
@@ -168,18 +169,13 @@ function parms = check_input(fname,options)
     error('file %s not found',parms.fname);
   end;
   [fdir,fstem,fext] = fileparts(parms.fname);
+  % remove problematic characters
   if isempty(parms.outstem)
-    % remove spaces
-    parms.outstem = regexprep(fstem,'\s.+','');
-    % remove quotes
-    parms.outstem = regexprep(parms.outstem,'''','');
-    % remove extra extension
-    parms.outstem = regexprep(parms.outstem,'\..+','');
+    parms.outstem = abcd_clean_fstem(fstem);
   end;
   % calculate time at the end of each TR
   parms.TR_offset = linspace(parms.TR,parms.numTRs * parms.TR,parms.numTRs);
   parms.TR_onset = parms.TR_offset - parms.TR;
-
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -315,10 +311,10 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [event_info,start_time,all_types,errcode] = get_event_info(parms)
+function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms)
   
   event_info=[]; start_time=[]; all_types=[];
-  errcode = 0;
+  errcode = 0; errmsg = [];
 
   try 
     % write event info to file
@@ -326,27 +322,40 @@ function [event_info,start_time,all_types,errcode] = get_event_info(parms)
                   parms.fieldnames, parms.outdir, parms.forceflag, parms.verbose);
     event_info = mmil_csv2struct(fname_csv);
   catch me
-    fprintf('%s: ERROR: failed to read e-prime file (format issues)\n%s\n',...
-      mfilename,me.message);
+    fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
+      mfilename,parms.fname,me.message);
     errcode = 1;
+    errmsg = 'failed to read e-prime file';
     return; 
   end
- 
- % get start times
- ind_start = find(~cellfun(@isempty,{event_info.prep_onset}));
- start_time = [event_info(ind_start).prep_onset];
- % remove non-events
- all_types = {event_info.type};
- ind_events = find(~cellfun(@isempty,all_types));
- event_info = event_info(ind_events);
- all_types = {event_info.type}; 
+  
+  % check experiment
+  experiment = mmil_getfield(event_info(1),'experiment');
+  if isempty(regexpi(experiment,'mid'))
+    fprintf('%s: ERROR: wrong experiment name in e-prime file %s: %s\n',...
+      mfilename,parms.fname,experiment);
+    errcode = 1;
+    errmsg = 'wrong experiment name';
+    return;
+  else
+    fprintf('%s: experiment name: %s\n',mfilename,experiment);
+  end;
 
- return;
+  % get start times
+  ind_start = find(~cellfun(@isempty,{event_info.prep_onset}));
+  start_time = [event_info(ind_start).prep_onset];
+  % remove non-events
+  all_types = {event_info.type};
+  ind_events = find(~cellfun(@isempty,all_types));
+  event_info = event_info(ind_events);
+  all_types = {event_info.type}; 
+
+return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [behav,runs_ok,errcode] = get_behavioral_data(event_info,parms,all_types)
-  errcode = 0;
+function [behav,runs_ok,errcode,errmsg] = get_behavioral_data(event_info,parms,all_types)
+  errcode = 0; errmsg = [];
 
   behav = [];
   behav.('SubjID') = []; behav.('VisitID') = []; 
@@ -360,7 +369,7 @@ function [behav,runs_ok,errcode] = get_behavioral_data(event_info,parms,all_type
   runs_ok = []; 
   for i=1:nruns
     run_len = length(find(runs==i));   
-    if run_len == 50 %hardcode the run lenght for now 
+    if run_len == 50 % require expected run length
      runs_ok = [runs_ok i];  
     else 
      if parms.verbose, fprintf('%s: run %d is short: %d trials found (<50 trials) \n',mfilename,i,run_len); end
@@ -374,8 +383,9 @@ function [behav,runs_ok,errcode] = get_behavioral_data(event_info,parms,all_type
    event_info = event_info(new_info);
    runs = runs(new_info); 
   elseif nruns == 0
-   fprintf('%s: ERROR: no valid e-prime runs\n',mfilename);
+   fprintf('%s: ERROR: no valid e-prime runs in %s\n',mfilename,parms.fname); 
    errcode = 1;
+   errmsg = 'no valid e-prime runs';
    return;
   end  
   behav.nruns = nruns; 
@@ -491,7 +501,7 @@ function [behav,runs_ok,errcode] = get_behavioral_data(event_info,parms,all_type
           type_rt_stim = sprintf('%s_bothruns_std_rt',eventname);
           behav.(type_rt_stim) = 'NaN'; 
         
-          for j=1:2 %runs
+          for j=1:2 % runs
             type_counts_run = sprintf('%s_run_%d_numtrials',eventname,j);   
             behav.(type_counts_run) = 'NaN'; 
             type_acc_run = sprintf('%s_run_%d_rate',eventname,j);
@@ -518,7 +528,7 @@ function [behav,runs_ok,errcode] = get_behavioral_data(event_info,parms,all_type
     end 
   end
   
-  %collapse across small or large 
+  % collapse across small or large 
   collapse_cond = {'reward', 'loss'}; 
   collapse_ind_type.reward = [];
   collapse_ind_type.loss = [];
@@ -543,7 +553,7 @@ function [behav,runs_ok,errcode] = get_behavioral_data(event_info,parms,all_type
     type_rt_total = sprintf('hilo%s_total_bothruns_std_rt',cond); 
     behav.(type_rt_total) = 'NaN'; 
     
-    for j=1:2 %runs
+    for j=1:2 % runs
      type_counts_run = sprintf('hilo%s_total_run_%d_numtrials',cond,j);    
      behav.(type_counts_run) = 'NaN';
      type_rt_run = sprintf('hilo%s_total_run_%d_mean_rt',cond,j);
@@ -583,7 +593,7 @@ function [behav,runs_ok,errcode] = get_behavioral_data(event_info,parms,all_type
           type_rt_stim = sprintf('hilo%s_bothruns_std_rt',eventname);
           behav.(type_rt_stim) = std(rt_keep); 
           
-          for j=1:2 %runs
+          for j=1:2 % runs
             type_counts_run = sprintf('hilo%s_run_%d_numtrials',eventname,j);   
             behav.(type_counts_run) = 'NaN'; 
             type_acc_run = sprintf('hilo%s_run_%d_rate',eventname,j);
@@ -621,7 +631,7 @@ function [behav,runs_ok,errcode] = get_behavioral_data(event_info,parms,all_type
           type_rt_stim = sprintf('hilo%s_bothruns_std_rt',eventname);
           behav.(type_rt_stim) = 'NaN'; 
           
-          for j=1:2 %runs
+          for j=1:2 % runs
             type_counts_run = sprintf('hilo%s_run_%d_numtrials',eventname,j);     
             behav.(type_counts_run) = 'NaN'; 
             type_acc_run = sprintf('hilo%s_run_%d_rate',eventname,j);
@@ -648,10 +658,10 @@ function [behav,runs_ok,errcode] = get_behavioral_data(event_info,parms,all_type
     end
   end
   
-  %money 
+  % money 
   money = [event_info.money]; 
   behav.('earnings_total') = sum(money); 
-  for j=1:2 %runs
+  for j=1:2 % runs
     type_counts_run = sprintf('earnings_run_%d',j);  
     behav.(type_counts_run) = 'NaN';   
   end   
@@ -680,7 +690,7 @@ function get_behavioral_data_empty(parms)
   
   counts_total = sprintf('total_numtrials'); 
   behav.(counts_total) = 'NaN';
-  for j=1:2 %runs
+  for j=1:2 % runs
     counts_total_run = sprintf('total_numtrials_run_%d',j);
     behav.(counts_total_run) = 'NaN'; 
   end 
@@ -696,7 +706,7 @@ function get_behavioral_data_empty(parms)
     type_counts_total = sprintf('%s_total_bothruns_std_rt',cond); 
     behav.(type_counts_total) = 'NaN';
     
-    for j=1:2 %runs
+    for j=1:2 % runs
       type_counts_run = sprintf('%s_total_run_%d_numtrials',cond,j);   
       behav.(type_counts_run) = 'NaN';
       type_counts_run = sprintf('%s_total_run_%d_mean_rt',cond,j);
@@ -721,7 +731,7 @@ function get_behavioral_data_empty(parms)
           type_rt_stim = sprintf('%s_bothruns_std_rt',eventname);
           behav.(type_rt_stim) = 'NaN'; 
 
-          for j=1:2 %runs
+          for j=1:2 % runs
             type_counts_run = sprintf('%s_run_%d_numtrials',eventname,j);  
             behav.(type_counts_run) = 'NaN'; 
             type_acc_run = sprintf('%s_run_%d_rate',eventname,j);
@@ -743,7 +753,7 @@ function get_behavioral_data_empty(parms)
           type_rt_stim = sprintf('%s_bothruns_std_rt',eventname);
           behav.(type_rt_stim) = 'NaN'; 
         
-          for j=1:2 %runs
+          for j=1:2 % runs
             type_counts_run = sprintf('%s_run_%d_numtrials',eventname,j);   
             behav.(type_counts_run) = 'NaN'; 
             type_acc_run = sprintf('%s_run_%d_rate',eventname,j);
@@ -758,7 +768,7 @@ function get_behavioral_data_empty(parms)
     end 
   end
   
-  %collapse across small or large 
+  % collapse across small or large 
   collapse_cond = {'reward', 'loss'}; 
   
   for i=1:size(collapse_cond,2)
@@ -770,7 +780,7 @@ function get_behavioral_data_empty(parms)
     type_rt_total = sprintf('hilo%s_total_bothruns_std_rt',cond); 
     behav.(type_rt_total) = 'NaN'; 
     
-    for j=1:2 %runs
+    for j=1:2 % runs
      type_counts_run = sprintf('hilo%s_total_run_%d_numtrials',cond,j);    
      behav.(type_counts_run) = 'NaN';
      type_rt_run = sprintf('hilo%s_total_run_%d_mean_rt',cond,j);
@@ -795,7 +805,7 @@ function get_behavioral_data_empty(parms)
           type_rt_stim = sprintf('hilo%s_bothruns_std_rt',eventname);
           behav.(type_rt_stim) = 'NaN';  
           
-          for j=1:2 %runs
+          for j=1:2 % runs
             type_counts_run = sprintf('hilo%s_run_%d_numtrials',eventname,j);   
             behav.(type_counts_run) = 'NaN'; 
             type_acc_run = sprintf('hilo%s_run_%d_rate',eventname,j);
@@ -817,7 +827,7 @@ function get_behavioral_data_empty(parms)
           type_rt_stim = sprintf('hilo%s_bothruns_std_rt',eventname);
           behav.(type_rt_stim) = 'NaN'; 
           
-          for j=1:2 %runs
+          for j=1:2 % runs
             type_counts_run = sprintf('hilo%s_run_%d_numtrials',eventname,j);     
             behav.(type_counts_run) = 'NaN'; 
             type_acc_run = sprintf('hilo%s_run_%d_rate',eventname,j);
@@ -831,9 +841,9 @@ function get_behavioral_data_empty(parms)
     end
   end
   
-  %money 
+  % money 
   behav.('earnings_total') = 'NaN'; 
-  for j=1:2 %runs
+  for j=1:2 % runs
     type_counts_run = sprintf('earnings_run_%d',j);  
     behav.(type_counts_run) = 'NaN';   
   end   
