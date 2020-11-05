@@ -4,5 +4,5 @@ addpath mmil_utils
 addpath aux
 
 %%
-abcd_extract_eprime_nback('NDAR_INV0FBX6KWX_WM.txt')
+abcd_extract_eprime_nback('NDAR_INVXXXXXXXX_WM.txt')
 
