@@ -30,7 +30,8 @@ function fname_out = abcd_check_eprime_sprdsh(fname,cols,fields,outdir,forceflag
 % Prev Mod: 01/14/20 by Octavio Ruiz
 % Prev Mod: 07/02/20 by Don Hagler
 % Prev Mod: 08/28/20 by Don Hagler
-% Last Mod: 11/01/20 by Don Hagler
+% Prev Mod: 11/01/20 by Don Hagler
+% Last Mod: 12/01/20 by Don Hagler
 %
 
 % Based on abcd_check_eprime_encoding.m
@@ -71,8 +72,10 @@ if ~exist(fname_out,'file') || forceflag
     if verbose, fprintf('%s: reading e-prime file using Python...\n',mfilename); end
     diagnos = -256;
     fname_ck = sprintf('%s/%s_checked.txt',outdir,fstem_clean);
-    cmd = sprintf('python3 $MMPS_DIR/python/eprime_sprdsht_get.py %s ExportFile %s',...
+    cmd = sprintf('python3 eprime_sprdsht_get.py %s ExportFile %s',...
       clean_fname(fname),clean_fname(fname_ck));
+%    cmd = sprintf('python3 $MMPS_DIR/python/eprime_sprdsht_get.py %s ExportFile %s',...
+%      clean_fname(fname),clean_fname(fname_ck));
 
     [status, cmdout] = mmil_unix(cmd);
 
