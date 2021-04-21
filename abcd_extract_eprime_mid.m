@@ -37,9 +37,10 @@ function [eprime_nruns,errcode,behav,errmsg] = abcd_extract_eprime_mid(fname,var
 % Created:  10/07/16 by Don Hagler
 % Prev Mod: 01/23/19 by Dani Cornejo
 % Prev Mod: 08/05/19 by Octavio Ruiz
-% Prev Mod: 07/20/20 by Don Hagler
-% Last Mod: 11/03/20 by Don Hagler
-%
+% Prev Mod: 11/03/20 by Don Hagler
+% Prev Mod: 03/31/21 by Emma Pearson, Anthony Juliano, and Bader Chaarani at UVM
+% Prev Mod: 04/06/21 by Don Hagler
+% Last Mod: 04/16/21 by Don Hagler
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -63,10 +64,10 @@ mmil_mkdir(parms.outdir);
 % create struct with info for each event
 [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms);  
 if errcode, return; end;
-
+        
 % get behavioral data and write it to a csv
 %   also we will return this table to the calling program 
-[behav,eprime_runs,errcode,errmsg] = get_behavioral_data(event_info,parms,all_types);
+[behav,eprime_runs,errcode,errmsg] = get_behav_feedback(event_info,start_time,parms,all_types);
 if errcode, return; end;
 
 parms.eprime_runs = eprime_runs; 
@@ -91,7 +92,7 @@ if parms.timing_files_flag && eprime_nruns
           ind_keep = find(acc==1);
           onset = {event_info(ind_type(ind_keep)).feedback_onset};
           offset = {event_info(ind_type(ind_keep)).feedback_offset};
-          [onset,offset] = check_offsets(onset,offset,eventname);
+          [onset,offset] = check_offsets(onset,offset,eventname,parms);
           % find most recent start time for each event
           [ind_start,event_ref_time] = set_ref(onset,start_time);
           % create files for each scan
@@ -102,7 +103,7 @@ if parms.timing_files_flag && eprime_nruns
           ind_keep = find(acc==0);
           onset = {event_info(ind_type(ind_keep)).feedback_onset};
           offset = {event_info(ind_type(ind_keep)).feedback_offset};
-          [onset,offset] = check_offsets(onset,offset,eventname);
+          [onset,offset] = check_offsets(onset,offset,eventname,parms);
           % find most recent start time for each event
           [ind_start,event_ref_time] = set_ref(onset,start_time);
           % create files for each scan
@@ -111,15 +112,15 @@ if parms.timing_files_flag && eprime_nruns
           ind_keep = [1:length(ind_type)];
           onset = {event_info(ind_type(ind_keep)).cue_onset}; 
           offset = {event_info(ind_type(ind_keep)).probe_offset}; 
-          [onset,offset] = check_offsets(onset,offset,eventname);
+          [onset,offset] = check_offsets(onset,offset,eventname,parms);
           % find most recent start time for each event
           [ind_start,event_ref_time] = set_ref(onset,start_time); 
           % create files for each scan
           write_files(eventname,onset,offset,ind_start,event_ref_time,parms)    
-      end; 
-    end;
-  end;
-end; %timing_files_flag
+      end 
+    end
+  end
+end
 
 return;
 
@@ -140,17 +141,20 @@ function parms = check_input(fname,options)
     'verbose',true,[false true],...
     'eprime_runs',1:2,[],...
     'eprime_nruns',0,0:2,...
+    'min_run_resps',20,[],...
     ...
     'colnames',  {'NARGUID','SessionDate','SessionTime','ExperimentName','MIDVERSION',...
                   'Block','SubTrial','Condition','PrepTime.OnsetTime','PrepTime.OffsetTime',...
                   'Cue.OnsetTime','Anticipation.OnsetTime','Probe.OnsetTime','Feedback.OnsetTime',...
-                  'Cue.OffsetTime','Anticipation.OffsetTime','Probe.OffsetTime','Feedback.OffsetTime',...
+                  'Cue.OffsetTime','Anticipation.OffsetTime','Probe.OffsetTime','Feedback.OffsetTime','ResponseCheck',...
+                  'TextDisplay1.RTTime','Feedback.RTTime','Probe.RESP','TextDisplay1.RESP','Feedback.RESP',...
                   'prbacc','prbrt','RunMoney',... 
                   'Anticipation.Duration','Cue.Duration','Probe.Duration','Probe.OffsetTime'},[],...
     'fieldnames',{'narguid','date','time','experiment','version',...
                   'run','trial','type','prep_onset','prep_offset',...
                   'cue_onset','antic_onset','probe_onset','feedback_onset',...
-                  'cue_offset','antic_offset','probe_offset','feedback_offset',...
+                  'cue_offset','antic_offset','probe_offset','feedback_offset','response_check',...
+                  'text_display_rttime','feedback_rttime','probe_resp','text_display_resp','feedback_resp',...
                   'acc','rt','money',...
                   'antic_dur','cue_dur','probe_dur','probe_offset'},[],...
     'typenames',{'SmallReward','LgReward','SmallPun','LgPun','Triangle'},[],...
@@ -194,11 +198,13 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [onset,offset] = check_offsets(onset,offset,eventname)
+function [onset,offset] = check_offsets(onset,offset,eventname,parms)
   ind_empty = find(cellfun(@isempty,onset) | cellfun(@isempty,offset));
   if ~isempty(ind_empty)
-    fprintf('%s: WARNING: %s event has %d onsets but %d offsets\n',...
-      mfilename,eventname,nnz(~cellfun(@isempty,onset)),nnz(~cellfun(@isempty,offset)));
+    if parms.verbose
+      fprintf('%s: WARNING: %s event has %d onsets but %d offsets\n',...
+        mfilename,eventname,nnz(~cellfun(@isempty,onset)),nnz(~cellfun(@isempty,offset)));
+    end
     ind_keep = setdiff([1:length(onset)],ind_empty);
     onset = onset(ind_keep);
     offset = offset(ind_keep);
@@ -267,7 +273,7 @@ function write_files(eventname,onset,offset,ind_start,event_ref_time,parms)
         fclose(fid);
         fid = fopen(fname_block_dur,'wt');  
         if fid<0, error('failed to open %s for writing',fname_block_dur); end;
-        block_len = mean(rel_offset- rel_onset); 
+        block_len = mean(rel_offset - rel_onset); 
         fprintf(fid,'%s\n',sprintf('%0.2f ',block_len));
         fclose(fid);
         % write to fsl file
@@ -322,8 +328,8 @@ function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms
                   parms.fieldnames, parms.outdir, parms.forceflag, parms.verbose);
     event_info = mmil_csv2struct(fname_csv);
   catch me
-    fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
-      mfilename,parms.fname,me.message);
+    if parms.verbose, fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
+      mfilename,parms.fname,me.message); end
     errcode = 1;
     errmsg = 'failed to read e-prime file';
     return; 
@@ -332,13 +338,13 @@ function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms
   % check experiment
   experiment = mmil_getfield(event_info(1),'experiment');
   if isempty(regexpi(experiment,'mid'))
-    fprintf('%s: ERROR: wrong experiment name in e-prime file %s: %s\n',...
-      mfilename,parms.fname,experiment);
+    if parms.verbose, fprintf('%s: ERROR: wrong experiment name in e-prime file %s: %s\n',...
+      mfilename,parms.fname,experiment); end
     errcode = 1;
     errmsg = 'wrong experiment name';
     return;
   else
-    fprintf('%s: experiment name: %s\n',mfilename,experiment);
+    if parms.verbose, fprintf('%s: experiment name: %s\n',mfilename,experiment); end
   end;
 
   % get start times
@@ -349,21 +355,202 @@ function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms
   ind_events = find(~cellfun(@isempty,all_types));
   event_info = event_info(ind_events);
   all_types = {event_info.type}; 
-
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [behav,runs_ok,errcode,errmsg] = get_behavioral_data(event_info,parms,all_types)
-  errcode = 0; errmsg = [];
+%  function get_behav_empty(parms) 
+%  
+%    behav = [];
+%    behav.('SubjID') = []; behav.('VisitID') = []; 
+%    behav.switch_flag = 0; 
+%    behav.perform_flag = 0;
+%    behav.nruns = 0; 
+%    
+%    counts_total = sprintf('total_numtrials'); 
+%    behav.(counts_total) = NaN;
+%    for j=1:2 % runs
+%      counts_total_run = sprintf('total_numtrials_run_%d',j);
+%      behav.(counts_total_run) = NaN; 
+%    end 
+%    
+%    for i=1:parms.nconds
+%      type = parms.typenames{i}; 
+%      cond = parms.condnames{i};
+%  
+%      type_counts_total = sprintf('%s_total_bothruns_numtrials',cond); 
+%      behav.(type_counts_total) = NaN; 
+%      type_counts_total = sprintf('%s_total_bothruns_mean_rt',cond); 
+%      behav.(type_counts_total) = NaN;
+%      type_counts_total = sprintf('%s_total_bothruns_std_rt',cond); 
+%      behav.(type_counts_total) = NaN;
+%      
+%      for j=1:2 % runs
+%        type_counts_run = sprintf('%s_total_run_%d_numtrials',cond,j);   
+%        behav.(type_counts_run) = NaN;
+%        type_counts_run = sprintf('%s_total_run_%d_mean_rt',cond,j);
+%        behav.(type_counts_run) = NaN;
+%        type_counts_run = sprintf('%s_total_run_%d_std_rt',cond,j);
+%        behav.(type_counts_run) = NaN;  
+%      end 
+%  
+%      for j=1:parms.nstims
+%        stim = parms.stimnames{j}; 
+%        eventname = sprintf('%s_%s',cond,stim);
+%  
+%        switch stim
+%          case 'pos_feedback'
+%            
+%            type_counts_stim = sprintf('%s_bothruns_numtrials',eventname);  
+%            behav.(type_counts_stim) = NaN;  
+%            type_acc_stim = sprintf('%s_bothruns_rate',eventname);
+%            behav.(type_acc_stim) = NaN; 
+%            type_rt_stim = sprintf('%s_bothruns_mean_rt',eventname);
+%            behav.(type_rt_stim) = NaN; 
+%            type_rt_stim = sprintf('%s_bothruns_std_rt',eventname);
+%            behav.(type_rt_stim) = NaN; 
+%  
+%            for j=1:2 % runs
+%              type_counts_run = sprintf('%s_run_%d_numtrials',eventname,j);  
+%              behav.(type_counts_run) = NaN; 
+%              type_acc_run = sprintf('%s_run_%d_rate',eventname,j);
+%              behav.(type_acc_run) = NaN; 
+%              type_rt_run = sprintf('%s_run_%d_mean_rt',eventname,j);    
+%              behav.(type_rt_run) = NaN; 
+%              type_rt_run = sprintf('%s_run_%d_std_rt',eventname,j);
+%              behav.(type_rt_run) = NaN; 
+%            end
+%  
+%          case 'neg_feedback'
+%            
+%            type_counts_stim = sprintf('%s_bothruns_numtrials',eventname);         
+%            behav.(type_counts_stim) = NaN; 
+%            type_acc_stim = sprintf('%s_bothruns_rate',eventname);
+%            behav.(type_acc_stim) = NaN; 
+%            type_rt_stim = sprintf('%s_bothruns_mean_rt',eventname);
+%            behav.(type_rt_stim) = NaN;  
+%            type_rt_stim = sprintf('%s_bothruns_std_rt',eventname);
+%            behav.(type_rt_stim) = NaN; 
+%          
+%            for j=1:2 % runs
+%              type_counts_run = sprintf('%s_run_%d_numtrials',eventname,j);   
+%              behav.(type_counts_run) = NaN; 
+%              type_acc_run = sprintf('%s_run_%d_rate',eventname,j);
+%              behav.(type_acc_run) = NaN;        
+%              type_rt_run = sprintf('%s_run_%d_mean_rt',eventname,j);   
+%              behav.(type_rt_run) = NaN; 
+%              type_rt_run = sprintf('%s_run_%d_std_rt',eventname,j);
+%              behav.(type_rt_run) = NaN;         
+%            end
+%  
+%        end
+%      end 
+%    end
+%    
+%    % collapse across small or large 
+%    collapse_cond = {'reward', 'loss'}; 
+%    
+%    for i=1:length(collapse_cond)
+%      cond = collapse_cond{i}; 
+%      type_counts_total = sprintf('hilo%s_total_bothruns_numtrials',cond); 
+%      behav.(type_counts_total) = NaN; 
+%      type_rt_total = sprintf('hilo%s_total_bothruns_mean_rt',cond); 
+%      behav.(type_rt_total) = NaN; 
+%      type_rt_total = sprintf('hilo%s_total_bothruns_std_rt',cond); 
+%      behav.(type_rt_total) = NaN; 
+%      
+%      for j=1:2 % runs
+%       type_counts_run = sprintf('hilo%s_total_run_%d_numtrials',cond,j);    
+%       behav.(type_counts_run) = NaN;
+%       type_rt_run = sprintf('hilo%s_total_run_%d_mean_rt',cond,j);
+%       behav.(type_rt_run) = NaN;
+%       type_rt_run = sprintf('hilo%s_total_run_%d_std_rt',cond,j);
+%       behav.(type_rt_run) = NaN;
+%      end 
+%     
+%      for j=1:parms.nstims
+%        stim = parms.stimnames{j}; 
+%        eventname = sprintf('%s_%s',cond,stim);   
+%      
+%        switch stim
+%          case 'pos_feedback'
+%      
+%            type_counts_stim = sprintf('hilo%s_bothruns_numtrials',eventname);
+%            behav.(type_counts_stim) = NaN; 
+%            type_acc_stim = sprintf('hilo%s_bothruns_rate',eventname);
+%            behav.(type_acc_stim) = NaN; 
+%            type_rt_stim = sprintf('hilo%s_bothruns_mean_rt',eventname);
+%            behav.(type_rt_stim) = NaN; 
+%            type_rt_stim = sprintf('hilo%s_bothruns_std_rt',eventname);
+%            behav.(type_rt_stim) = NaN;  
+%            
+%            for j=1:2 % runs
+%              type_counts_run = sprintf('hilo%s_run_%d_numtrials',eventname,j);   
+%              behav.(type_counts_run) = NaN; 
+%              type_acc_run = sprintf('hilo%s_run_%d_rate',eventname,j);
+%              behav.(type_acc_run) = NaN; 
+%              type_rt_run = sprintf('hilo%s_run_%d_mean_rt',eventname,j);  
+%              behav.(type_rt_run) = NaN;   
+%              type_rt_run = sprintf('hilo%s_run_%d_std_rt',eventname,j);
+%              behav.(type_rt_run) = NaN;
+%            end 
+%      
+%          case 'neg_feedback'
+%      
+%            type_counts_stim = sprintf('hilo%s_bothruns_numtrials',eventname);
+%            behav.(type_counts_stim) = NaN; 
+%            type_acc_stim = sprintf('hilo%s_bothruns_rate',eventname);
+%            behav.(type_acc_stim) = NaN;  
+%            type_rt_stim = sprintf('hilo%s_bothruns_mean_rt',eventname);  
+%            behav.(type_rt_stim) = NaN; 
+%            type_rt_stim = sprintf('hilo%s_bothruns_std_rt',eventname);
+%            behav.(type_rt_stim) = NaN; 
+%            
+%            for j=1:2 % runs
+%              type_counts_run = sprintf('hilo%s_run_%d_numtrials',eventname,j);     
+%              behav.(type_counts_run) = NaN; 
+%              type_acc_run = sprintf('hilo%s_run_%d_rate',eventname,j);
+%              behav.(type_acc_run) = NaN;        
+%              type_rt_run = sprintf('hilo%s_run_%d_mean_rt',eventname,j);  
+%              behav.(type_rt_run) = NaN;    
+%              type_rt_run = sprintf('hilo%s_run_%d_std_rt',eventname,j);
+%              behav.(type_rt_run) = NaN;
+%            end
+%            
+%        end
+%      end
+%    end
+%    
+%    % money 
+%    behav.('earnings_total') = NaN; 
+%    for j=1:2 % runs
+%      type_counts_run = sprintf('earnings_run_%d',j);  
+%      behav.(type_counts_run) = NaN;   
+%    end 
+%    
+%    % write to csv
+%    fname_csv_out = sprintf('%s/%s_behavioral.csv',parms.outdir,parms.outstem); 
+%    if ~exist(fname_csv_out,'file') || parms.forceflag
+%      mmil_struct2csv(behav,fname_csv_out);
+%    end;
+%  return; 
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+function [behav,runs_ok,errcode,errmsg] = get_behav_feedback(event_info,start_time,parms,all_types)
+  errcode = 0; errmsg = [];
+  
   behav = [];
   behav.('SubjID') = []; behav.('VisitID') = []; 
   behav.switch_flag = 0; 
+  behav.feedback_flag = 1;
   behav.perform_flag = 1;
+
+  % check for variable in 2017 version
+  fbflag = isfield(event_info, 'feedback_resp');
   
   % check if second runs is truncated 
-  runs= [event_info.run];  
+  runs = [event_info.run];  
   nruns = length(unique(runs)); 
 
   runs_ok = []; 
@@ -376,30 +563,30 @@ function [behav,runs_ok,errcode,errmsg] = get_behavioral_data(event_info,parms,a
     end 
   end
   nruns = length(runs_ok); 
-  
+
   if nruns == 1
-   new_info = find(runs==runs_ok);
-   all_types = all_types(new_info);  
-   event_info = event_info(new_info);
-   runs = runs(new_info); 
+    new_info = find(runs==runs_ok);
+    all_types = all_types(new_info);  
+    event_info = event_info(new_info);
+    runs = runs(new_info); 
   elseif nruns == 0
-   fprintf('%s: ERROR: no valid e-prime runs in %s\n',mfilename,parms.fname); 
-   errcode = 1;
-   errmsg = 'no valid e-prime runs';
-   return;
+    if parms.verbose, fprintf('%s: ERROR: no valid e-prime runs in %s\n',mfilename,parms.fname); end
+    errcode = 1;
+    errmsg = 'no valid e-prime runs';
+    return;
   end  
   behav.nruns = nruns; 
   
   counts_total = sprintf('total_numtrials'); 
-  behav.(counts_total) = size(all_types,2);
-  for j=1:2 %runs
+  behav.(counts_total) = length(all_types);
+  for j=1:2 % runs
     counts_total_run = sprintf('total_numtrials_run_%d',j);
-    behav.(counts_total_run) = 'NaN'; 
+    behav.(counts_total_run) = NaN; 
   end 
-  for j=runs_ok %runs
+  for j=runs_ok % runs
     ind_type_run = find(runs==j); 
     counts_total_run = sprintf('total_numtrials_run_%d',j);
-    behav.(counts_total_run) = size(ind_type_run,2); 
+    behav.(counts_total_run) = length(ind_type_run); 
   end 
   
   for i=1:parms.nconds
@@ -408,128 +595,172 @@ function [behav,runs_ok,errcode,errmsg] = get_behavioral_data(event_info,parms,a
     ind_type = find(strcmp(type,all_types)); 
 
     type_counts_total = sprintf('%s_total_bothruns_numtrials',cond); 
-    behav.(type_counts_total) = size(ind_type,2); 
-    type_counts_total = sprintf('%s_total_bothruns_mean_rt',cond); 
-    behav.(type_counts_total) = 'NaN';
+    behav.(type_counts_total) = length(ind_type); 
+    type_counts_total = sprintf('%s_total_bothruns_mean_rt',cond);
+    if fbflag
+      rt_keep = get_rt(event_info(ind_type));
+      behav.(type_counts_total) = mean(rt_keep);
+    else
+      behav.(type_counts_total) = NaN;
+    end;
     type_counts_total = sprintf('%s_total_bothruns_std_rt',cond); 
-    behav.(type_counts_total) = 'NaN';
+    if fbflag
+      behav.(type_counts_total) = std(rt_keep);
+    else
+      behav.(type_counts_total) = NaN;
+    end;
     
-    for j=1:2 %runs
+    for j=1:2 % runs
       type_counts_run = sprintf('%s_total_run_%d_numtrials',cond,j);   
-      behav.(type_counts_run) = 'NaN';
+      behav.(type_counts_run) = NaN;
       type_counts_run = sprintf('%s_total_run_%d_mean_rt',cond,j);
-      behav.(type_counts_run) = 'NaN';
+      behav.(type_counts_run) = NaN;
       type_counts_run = sprintf('%s_total_run_%d_std_rt',cond,j);
-      behav.(type_counts_run) = 'NaN';  
+      behav.(type_counts_run) = NaN;  
     end 
-    for j=runs_ok %runs
+    for j=runs_ok % runs
       type_counts_run = sprintf('%s_total_run_%d_numtrials',cond,j);   
       ind_type_run = [intersect(find(runs==j),ind_type)];    
-      behav.(type_counts_run) = size(ind_type_run,2); 
+      behav.(type_counts_run) = length(ind_type_run); 
       type_counts_run = sprintf('%s_total_run_%d_mean_rt',cond,j);
-      behav.(type_counts_run) = 'NaN';
+      if fbflag
+        rt_keep = get_rt(event_info(ind_type_run));
+        behav.(type_counts_run) = mean(rt_keep);
+      else
+        behav.(type_counts_run) = NaN;
+      end;
       type_counts_run = sprintf('%s_total_run_%d_std_rt',cond,j);
-      behav.(type_counts_run) = 'NaN';  
+      if fbflag
+        behav.(type_counts_run) = std(rt_keep);
+      else
+        behav.(type_counts_run) = NaN;
+      end;
     end 
 
     acc = [event_info(ind_type).acc];
-    rt = [event_info(ind_type).rt];
 
     for j=1:parms.nstims
       stim = parms.stimnames{j}; 
       eventname = sprintf('%s_%s',cond,stim);
 
       acc = [event_info(ind_type).acc]; 
-      rt = [event_info(ind_type).rt]; 
 
       switch stim
         case 'pos_feedback'
 
           ind_keep = find(acc==1); 
           type_counts_stim = sprintf('%s_bothruns_numtrials',eventname);  
-          if size(ind_keep,2) < 4
+          if length(ind_keep) < 4
             if parms.verbose, fprintf('%s: %s < 4 \n',mfilename,type_counts_stim); end
-            behav.perform_flag = 0;
+            behav.feedback_flag = 0;
           end 
           
-          behav.(type_counts_stim) = size(ind_keep,2); 
+          behav.(type_counts_stim) = length(ind_keep); 
           type_acc_stim = sprintf('%s_bothruns_rate',eventname);
-          behav.(type_acc_stim) = size(ind_keep,2)./size(ind_type,2); 
+          behav.(type_acc_stim) = length(ind_keep)./length(ind_type); 
           type_rt_stim = sprintf('%s_bothruns_mean_rt',eventname);
-          rt_keep = [event_info(ind_type(ind_keep)).(['rt'])];   
+          rt_keep = get_rt(event_info(ind_type(ind_keep)));
           behav.(type_rt_stim) = mean(rt_keep);  
           type_rt_stim = sprintf('%s_bothruns_std_rt',eventname);
           behav.(type_rt_stim) = std(rt_keep);
 
-          for j=1:2 %runs
+          for j=1:2 % runs
             type_counts_run = sprintf('%s_run_%d_numtrials',eventname,j);  
-            behav.(type_counts_run) = 'NaN'; 
+            behav.(type_counts_run) = NaN; 
             type_acc_run = sprintf('%s_run_%d_rate',eventname,j);
-            behav.(type_acc_run) = 'NaN'; 
+            behav.(type_acc_run) = NaN; 
             type_rt_run = sprintf('%s_run_%d_mean_rt',eventname,j);    
-            behav.(type_rt_run) = 'NaN'; 
+            behav.(type_rt_run) = NaN; 
             type_rt_run = sprintf('%s_run_%d_std_rt',eventname,j);
-            behav.(type_rt_run) = 'NaN'; 
+            behav.(type_rt_run) = NaN; 
           end
           for j=runs_ok
             type_counts_run = sprintf('%s_run_%d_numtrials',eventname,j); 
             ind_type_run = [intersect(find(runs==j),ind_type)];  
             ind_keep_run = [intersect(find(runs==j),ind_type(ind_keep))];    
-            behav.(type_counts_run) = size(ind_keep_run,2); 
+            behav.(type_counts_run) = length(ind_keep_run); 
             type_acc_run = sprintf('%s_run_%d_rate',eventname,j);
-            behav.(type_acc_run) = size(ind_keep_run,2)./size(ind_type_run,2); 
+            behav.(type_acc_run) = length(ind_keep_run)./length(ind_type_run); 
             type_rt_run = sprintf('%s_run_%d_mean_rt',eventname,j);
-            rt_keep = [event_info(ind_keep_run).(['rt'])];    
+            rt_keep = get_rt(event_info(ind_keep_run));
             behav.(type_rt_run) = mean(rt_keep);
             type_rt_run = sprintf('%s_run_%d_std_rt',eventname,j);
             behav.(type_rt_run) = std(rt_keep);
           end
 
         case 'neg_feedback'
+          
           ind_keep = find(acc==0); 
-          type_counts_stim = sprintf('%s_bothruns_numtrials',eventname); 
-          if size(ind_keep,2) < 4
+          type_counts_stim = sprintf('%s_bothruns_numtrials',eventname);  
+          if length(ind_keep) < 4
             if parms.verbose, fprintf('%s: %s < 4 \n',mfilename,type_counts_stim); end
-            behav.perform_flag = 0;
+            behav.feedback_flag = 0;
           end 
           
-          behav.(type_counts_stim) = size(ind_keep,2); 
+          behav.(type_counts_stim) = length(ind_keep); 
           type_acc_stim = sprintf('%s_bothruns_rate',eventname);
-          behav.(type_acc_stim) = size(ind_keep,2)./size(ind_type,2); 
+          behav.(type_acc_stim) = length(ind_keep)./length(ind_type); 
           type_rt_stim = sprintf('%s_bothruns_mean_rt',eventname);
-          behav.(type_rt_stim) = 'NaN';  
+          if fbflag
+            rt_keep = get_rt(event_info(ind_type(ind_keep)));
+            behav.(type_rt_stim) = mean(rt_keep);
+          else
+            behav.(type_rt_stim) = NaN;
+          end
           type_rt_stim = sprintf('%s_bothruns_std_rt',eventname);
-          behav.(type_rt_stim) = 'NaN'; 
-        
+          if fbflag
+            behav.(type_rt_stim) = std(rt_keep);
+          else
+            behav.(type_rt_stim) = NaN;
+          end;
+ 
           for j=1:2 % runs
-            type_counts_run = sprintf('%s_run_%d_numtrials',eventname,j);   
-            behav.(type_counts_run) = 'NaN'; 
+            type_counts_run = sprintf('%s_run_%d_numtrials',eventname,j);  
+            behav.(type_counts_run) = NaN; 
             type_acc_run = sprintf('%s_run_%d_rate',eventname,j);
-            behav.(type_acc_run) = 'NaN';        
-            type_rt_run = sprintf('%s_run_%d_mean_rt',eventname,j);   
-            behav.(type_rt_run) = 'NaN'; 
+            behav.(type_acc_run) = NaN;
+            type_rt_run = sprintf('%s_run_%d_mean_rt',eventname,j);    
+            if fbflag
+              rt_keep = get_rt(event_info(ind_type_run));
+              behav.(type_rt_run) = mean(rt_keep);
+            else
+              behav.(type_rt_run) = NaN;
+            end
             type_rt_run = sprintf('%s_run_%d_std_rt',eventname,j);
-            behav.(type_rt_run) = 'NaN';         
+            if fbflag
+              behav.(type_rt_run) = std(rt_keep);
+            else
+              behav.(type_rt_run) = NaN;
+            end
           end
           for j=runs_ok
             type_counts_run = sprintf('%s_run_%d_numtrials',eventname,j); 
             ind_type_run = [intersect(find(runs==j),ind_type)];  
             ind_keep_run = [intersect(find(runs==j),ind_type(ind_keep))];    
-            behav.(type_counts_run) = size(ind_keep_run,2); 
+            behav.(type_counts_run) = length(ind_keep_run); 
             type_acc_run = sprintf('%s_run_%d_rate',eventname,j);
-            behav.(type_acc_run) = size(ind_keep_run,2)./size(ind_type_run,2);          
-            type_rt_run = sprintf('%s_run_%d_mean_rt',eventname,j);   
-            behav.(type_rt_run) = 'NaN'; 
+            behav.(type_acc_run) = length(ind_keep_run)./length(ind_type_run);
+            type_rt_run = sprintf('%s_run_%d_mean_rt',eventname,j);
+            if fbflag
+              rt_keep = get_rt(event_info(ind_keep_run));
+              behav.(type_rt_run) = mean(rt_keep);
+            else
+              behav.(type_rt_run) = NaN;
+            end;
             type_rt_run = sprintf('%s_run_%d_std_rt',eventname,j);
-            behav.(type_rt_run) = 'NaN';         
+            if fbflag
+              behav.(type_rt_run) = std(rt_keep);
+            else
+              behav.(type_rt_run) = NaN;
+            end
           end
-
+          
       end
     end 
   end
   
   % collapse across small or large 
-  collapse_cond = {'reward', 'loss'}; 
+  collapse_cond = {'reward', 'loss'};
   collapse_ind_type.reward = [];
   collapse_ind_type.loss = [];
   
@@ -544,39 +775,56 @@ function [behav,runs_ok,errcode,errmsg] = get_behavioral_data(event_info,parms,a
     end
   end  
   
-  for i=1:size(collapse_cond,2)
+  for i=1:length(collapse_cond)
     cond = collapse_cond{i}; 
     type_counts_total = sprintf('hilo%s_total_bothruns_numtrials',cond); 
     behav.(type_counts_total) = size(collapse_ind_type.(cond),2); 
-    type_rt_total = sprintf('hilo%s_total_bothruns_mean_rt',cond); 
-    behav.(type_rt_total) = 'NaN'; 
+    type_rt_total = sprintf('hilo%s_total_bothruns_mean_rt',cond);
+    if fbflag
+      rt_keep = get_rt(event_info(ind_type));
+      behav.(type_rt_total) = mean(rt_keep);
+    else
+      behav.(type_rt_total) = NaN;
+    end
     type_rt_total = sprintf('hilo%s_total_bothruns_std_rt',cond); 
-    behav.(type_rt_total) = 'NaN'; 
+    if fbflag
+      behav.(type_rt_total) = std(rt_keep);
+    else
+      behav.(type_rt_total) = NaN;
+    end
     
     for j=1:2 % runs
-     type_counts_run = sprintf('hilo%s_total_run_%d_numtrials',cond,j);    
-     behav.(type_counts_run) = 'NaN';
-     type_rt_run = sprintf('hilo%s_total_run_%d_mean_rt',cond,j);
-     behav.(type_rt_run) = 'NaN';
-     type_rt_run = sprintf('hilo%s_total_run_%d_std_rt',cond,j);
-     behav.(type_rt_run) = 'NaN';
+      type_counts_run = sprintf('hilo%s_total_run_%d_numtrials',cond,j);    
+      behav.(type_counts_run) = NaN;
+      type_rt_run = sprintf('hilo%s_total_run_%d_mean_rt',cond,j);
+      behav.(type_rt_run) = NaN;
+      type_rt_run = sprintf('hilo%s_total_run_%d_std_rt',cond,j);
+      behav.(type_rt_run) = NaN;
     end 
     for j=runs_ok
-     type_counts_run = sprintf('hilo%s_total_run_%d_numtrials',cond,j); 
-     ind_type_run = [intersect(find(runs==j),collapse_ind_type.(cond))];    
-     behav.(type_counts_run) = size(ind_type_run,2); 
-     type_rt_run = sprintf('hilo%s_total_run_%d_mean_rt',cond,j);
-     behav.(type_rt_run) = 'NaN';
-     type_rt_run = sprintf('hilo%s_total_run_%d_std_rt',cond,j);
-     behav.(type_rt_run) = 'NaN';
+      type_counts_run = sprintf('hilo%s_total_run_%d_numtrials',cond,j); 
+      ind_type_run = [intersect(find(runs==j),collapse_ind_type.(cond))];    
+      behav.(type_counts_run) = length(ind_type_run); 
+      type_rt_run = sprintf('hilo%s_total_run_%d_mean_rt',cond,j);      
+      if fbflag
+        rt_keep = get_rt(event_info(ind_type_run));
+        behav.(type_rt_run) = mean(rt_keep);
+      else
+        behav.(type_rt_run) = NaN;
+      end
+      type_rt_run = sprintf('hilo%s_total_run_%d_std_rt',cond,j);
+      if fbflag
+        behav.(type_rt_run) = std(rt_keep);
+      else
+        behav.(type_rt_run) = NaN;
+      end
     end 
-   
+    
     for j=1:parms.nstims
       stim = parms.stimnames{j}; 
       eventname = sprintf('%s_%s',cond,stim);   
     
       acc = [event_info(collapse_ind_type.(cond)).acc];  
-      rt = [event_info(collapse_ind_type.(cond)).rt]; 
     
       switch stim
         case 'pos_feedback'
@@ -584,76 +832,92 @@ function [behav,runs_ok,errcode,errmsg] = get_behavioral_data(event_info,parms,a
           ind_keep = find(acc==1); 
           ind_type = collapse_ind_type.(cond); 
           type_counts_stim = sprintf('hilo%s_bothruns_numtrials',eventname);
-          behav.(type_counts_stim) = size(ind_keep,2); 
+          behav.(type_counts_stim) = length(ind_keep); 
           type_acc_stim = sprintf('hilo%s_bothruns_rate',eventname);
-          behav.(type_acc_stim) = size(ind_keep,2)./size(ind_type,2); 
+          behav.(type_acc_stim) = length(ind_keep)./length(ind_type); 
           type_rt_stim = sprintf('hilo%s_bothruns_mean_rt',eventname);
-          rt_keep = [event_info(ind_type(ind_keep)).(['rt'])];   
+          rt_keep = get_rt(event_info(ind_type(ind_keep)));
           behav.(type_rt_stim) = mean(rt_keep); 
           type_rt_stim = sprintf('hilo%s_bothruns_std_rt',eventname);
           behav.(type_rt_stim) = std(rt_keep); 
           
           for j=1:2 % runs
             type_counts_run = sprintf('hilo%s_run_%d_numtrials',eventname,j);   
-            behav.(type_counts_run) = 'NaN'; 
+            behav.(type_counts_run) = NaN; 
             type_acc_run = sprintf('hilo%s_run_%d_rate',eventname,j);
-            behav.(type_acc_run) = 'NaN'; 
+            behav.(type_acc_run) = NaN; 
             type_rt_run = sprintf('hilo%s_run_%d_mean_rt',eventname,j);  
-            behav.(type_rt_run) = 'NaN';   
+            behav.(type_rt_run) = NaN;   
             type_rt_run = sprintf('hilo%s_run_%d_std_rt',eventname,j);
-            behav.(type_rt_run) = 'NaN';
+            behav.(type_rt_run) = NaN;
           end 
           for j=runs_ok
             type_counts_run = sprintf('hilo%s_run_%d_numtrials',eventname,j);  
             ind_type_run = [intersect(find(runs==j),ind_type)];  
             ind_keep_run = [intersect(find(runs==j),ind_type(ind_keep))];    
-            behav.(type_counts_run) = size(ind_keep_run,2); 
+            behav.(type_counts_run) = length(ind_keep_run); 
             type_acc_run = sprintf('hilo%s_run_%d_rate',eventname,j);
-            behav.(type_acc_run) = size(ind_keep_run,2)./size(ind_type_run,2); 
+            behav.(type_acc_run) = length(ind_keep_run)./length(ind_type_run); 
             type_rt_run = sprintf('hilo%s_run_%d_mean_rt',eventname,j);
-            rt_keep = [event_info(ind_keep_run).(['rt'])];    
+            rt_keep = get_rt(event_info(ind_keep_run));
             behav.(type_rt_run) = mean(rt_keep);    
             type_rt_run = sprintf('hilo%s_run_%d_std_rt',eventname,j);
             behav.(type_rt_run) = std(rt_keep);
           end 
 
-        
         case 'neg_feedback'
     
           ind_keep = find(acc==0); 
           ind_type = collapse_ind_type.(cond); 
           type_counts_stim = sprintf('hilo%s_bothruns_numtrials',eventname);
-          behav.(type_counts_stim) = size(ind_keep,2); 
+          behav.(type_counts_stim) = length(ind_keep); 
           type_acc_stim = sprintf('hilo%s_bothruns_rate',eventname);
-          behav.(type_acc_stim) = size(ind_keep,2)./size(ind_type,2); 
-          type_rt_stim = sprintf('hilo%s_bothruns_mean_rt',eventname);  
-          behav.(type_rt_stim) = 'NaN'; 
+          behav.(type_acc_stim) = length(ind_keep)./length(ind_type); 
+          type_rt_stim = sprintf('hilo%s_bothruns_mean_rt',eventname);
+          if fbflag
+            rt_keep = get_rt(event_info(ind_type(ind_keep)));
+            behav.(type_rt_stim) = mean(rt_keep);
+          else
+            behav.(type_rt_stim) = NaN;
+          end
           type_rt_stim = sprintf('hilo%s_bothruns_std_rt',eventname);
-          behav.(type_rt_stim) = 'NaN'; 
+          if fbflag
+            behav.(type_rt_stim) = std(rt_keep);
+          else
+            behav.(type_rt_stim) = NaN;
+          end
           
           for j=1:2 % runs
             type_counts_run = sprintf('hilo%s_run_%d_numtrials',eventname,j);     
-            behav.(type_counts_run) = 'NaN'; 
+            behav.(type_counts_run) = NaN; 
             type_acc_run = sprintf('hilo%s_run_%d_rate',eventname,j);
-            behav.(type_acc_run) = 'NaN';        
+            behav.(type_acc_run) = NaN;        
             type_rt_run = sprintf('hilo%s_run_%d_mean_rt',eventname,j);  
-            behav.(type_rt_run) = 'NaN';    
+            behav.(type_rt_run) = NaN;    
             type_rt_run = sprintf('hilo%s_run_%d_std_rt',eventname,j);
-            behav.(type_rt_run) = 'NaN';
+            behav.(type_rt_run) = NaN;
           end
-           for j=runs_ok
+          for j=runs_ok
             type_counts_run = sprintf('hilo%s_run_%d_numtrials',eventname,j);  
             ind_type_run = [intersect(find(runs==j),ind_type)];  
             ind_keep_run = [intersect(find(runs==j),ind_type(ind_keep))];    
-            behav.(type_counts_run) = size(ind_keep_run,2); 
+            behav.(type_counts_run) = length(ind_keep_run); 
             type_acc_run = sprintf('hilo%s_run_%d_rate',eventname,j);
-            behav.(type_acc_run) = size(ind_keep_run,2)./size(ind_type_run,2);         
-            type_rt_run = sprintf('hilo%s_run_%d_mean_rt',eventname,j);  
-            behav.(type_rt_run) = 'NaN';    
+            behav.(type_acc_run) = length(ind_keep_run)./length(ind_type_run);
+            type_rt_run = sprintf('hilo%s_run_%d_mean_rt',eventname,j);
+            if fbflag
+              rt_keep = get_rt(event_info(ind_keep_run));
+              behav.(type_rt_run) = mean(rt_keep);
+            else
+              behav.(type_rt_run) = NaN;
+            end
             type_rt_run = sprintf('hilo%s_run_%d_std_rt',eventname,j);
-            behav.(type_rt_run) = 'NaN';
+            if fbflag
+              behav.(type_rt_run) = std(rt_keep);
+            else
+              behav.(type_rt_run) = NaN;
+            end
           end
-          
       end        
     end
   end
@@ -663,198 +927,121 @@ function [behav,runs_ok,errcode,errmsg] = get_behavioral_data(event_info,parms,a
   behav.('earnings_total') = sum(money); 
   for j=1:2 % runs
     type_counts_run = sprintf('earnings_run_%d',j);  
-    behav.(type_counts_run) = 'NaN';   
+    behav.(type_counts_run) = NaN;   
   end   
   for j=runs_ok
     type_counts_run = sprintf('earnings_run_%d',j);  
     behav.(type_counts_run) = sum(money(find(runs==j)));   
   end   
-    
+
+  % check responses
+  [trial_resp_array, valid_trial_resp_array] = check_responses(event_info);
+  if trial_resp_array(1) < parms.min_run_resps || trial_resp_array(2) < parms.min_run_resps
+    behav.perform_flag = 0;
+  else
+    behav.perform_flag = 1;
+  end
+  for j=1:2
+    trialnumtrials = sprintf('trialresp_run_%d_numtrials',j);
+    behav.(trialnumtrials) = trial_resp_array(j);
+    validtrialnumtrials = sprintf('valid_trialresp_run_%d_numtrials',j);
+    behav.(validtrialnumtrials) = valid_trial_resp_array(j);
+  end
+  trialtotalnumtrials = sprintf('trialresp_bothruns_numtrials');
+  behav.(trialtotalnumtrials) = trial_resp_array(3);
+  validtrialtotalnumtrials = sprintf('validtrialresp_bothruns_numtrials',j);
+  behav.(validtrialtotalnumtrials) = valid_trial_resp_array(3);
+  
   % write to csv
   fname_csv_out = sprintf('%s/%s_behavioral.csv',parms.outdir,parms.outstem); 
   if ~exist(fname_csv_out,'file') || parms.forceflag
     mmil_struct2csv(behav,fname_csv_out)
-  end;
-  
-return; 
+  end
+return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function get_behavioral_data_empty(parms) 
+% check if response is premature
+function premature = get_premature(event_info)
+  premature = 0;
+  response_check = mmil_getfield(event_info,'response_check');
+  if strcmp(event_info.response_check,'You pressed too soon!'), premature = 1; end
+return;
 
-  behav = [];
-  behav.('SubjID') = []; behav.('VisitID') = []; 
-  behav.switch_flag = 0; 
-  behav.perform_flag = 0;
-  behav.nruns = 0; 
-  
-  counts_total = sprintf('total_numtrials'); 
-  behav.(counts_total) = 'NaN';
-  for j=1:2 % runs
-    counts_total_run = sprintf('total_numtrials_run_%d',j);
-    behav.(counts_total_run) = 'NaN'; 
-  end 
-  
-  for i=1:parms.nconds
-    type = parms.typenames{i}; 
-    cond = parms.condnames{i};
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-    type_counts_total = sprintf('%s_total_bothruns_numtrials',cond); 
-    behav.(type_counts_total) = 'NaN'; 
-    type_counts_total = sprintf('%s_total_bothruns_mean_rt',cond); 
-    behav.(type_counts_total) = 'NaN';
-    type_counts_total = sprintf('%s_total_bothruns_std_rt',cond); 
-    behav.(type_counts_total) = 'NaN';
-    
-    for j=1:2 % runs
-      type_counts_run = sprintf('%s_total_run_%d_numtrials',cond,j);   
-      behav.(type_counts_run) = 'NaN';
-      type_counts_run = sprintf('%s_total_run_%d_mean_rt',cond,j);
-      behav.(type_counts_run) = 'NaN';
-      type_counts_run = sprintf('%s_total_run_%d_std_rt',cond,j);
-      behav.(type_counts_run) = 'NaN';  
-    end 
+% check button press
+function [trial_resp_array, valid_trial_resp_array] = check_responses(event_info)
+  runs = [event_info.trial];  
+  nruns = length(unique(runs));
+  trial_resp_array = []; valid_trial_resp_array = [];
+  nresp_run1 = 0; nresp_valid_run1 = 0;
+  nresp_run2 = 0; nresp_valid_run2 = 0;
+  for k=1:length(event_info)
+    premature = get_premature(event_info(k));
+    response = ~isempty(mmil_getfield(event_info(k),'probe_resp')) ||...
+               ~isempty(mmil_getfield(event_info(k),'text_display_resp')) ||...
+               ~isempty(mmil_getfield(event_info(k),'feedback_resp'));
+    if event_info(k).run == 1
+      if response || premature, nresp_run1 = nresp_run1 + 1; end;
+      if response && ~premature, nresp_valid_run1 = nresp_valid_run1 + 1; end;
+    elseif event_info(k).run == 2
+      if response || premature, nresp_run2 = nresp_run2 + 1; end;
+      if response && ~premature, nresp_valid_run2 = nresp_valid_run2 + 1; end;
+    end;
+  end
+  trial_resp_array = [nresp_run1,nresp_run2,nresp_run1 + nresp_run2];
+  valid_trial_resp_array = [nresp_valid_run1,nresp_valid_run2,nresp_valid_run1 + nresp_valid_run2];
+return;
 
-    for j=1:parms.nstims
-      stim = parms.stimnames{j}; 
-      eventname = sprintf('%s_%s',cond,stim);
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-      switch stim
-        case 'pos_feedback'
-          
-          type_counts_stim = sprintf('%s_bothruns_numtrials',eventname);  
-          behav.(type_counts_stim) = 'NaN';  
-          type_acc_stim = sprintf('%s_bothruns_rate',eventname);
-          behav.(type_acc_stim) = 'NaN'; 
-          type_rt_stim = sprintf('%s_bothruns_mean_rt',eventname);
-          behav.(type_rt_stim) = 'NaN'; 
-          type_rt_stim = sprintf('%s_bothruns_std_rt',eventname);
-          behav.(type_rt_stim) = 'NaN'; 
+% get valid response times
+%  function vals = get_rt(event_info)
+%    vals = [];
+%    if ~isfield(event_info,'rt_any')
+%      vals = {event_info.rt};
+%    else
+%      vals = {event_info.rt_any};
+%      for k=1:length(event_info)
+%        premature = get_premature(event_info(k));
+%        if premature, vals{k} = []; end;
+%      end;
+%    end;
+%    if iscell(vals)
+%      i_valid = find(~cellfun(@isempty,vals));
+%      vals = cell2mat(vals(i_valid));
+%    end;
+%    vals = nonzeros(vals(~isnan(vals)));
+%  return
 
-          for j=1:2 % runs
-            type_counts_run = sprintf('%s_run_%d_numtrials',eventname,j);  
-            behav.(type_counts_run) = 'NaN'; 
-            type_acc_run = sprintf('%s_run_%d_rate',eventname,j);
-            behav.(type_acc_run) = 'NaN'; 
-            type_rt_run = sprintf('%s_run_%d_mean_rt',eventname,j);    
-            behav.(type_rt_run) = 'NaN'; 
-            type_rt_run = sprintf('%s_run_%d_std_rt',eventname,j);
-            behav.(type_rt_run) = 'NaN'; 
-          end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-        case 'neg_feedback'
-          
-          type_counts_stim = sprintf('%s_bothruns_numtrials',eventname);         
-          behav.(type_counts_stim) = 'NaN'; 
-          type_acc_stim = sprintf('%s_bothruns_rate',eventname);
-          behav.(type_acc_stim) = 'NaN'; 
-          type_rt_stim = sprintf('%s_bothruns_mean_rt',eventname);
-          behav.(type_rt_stim) = 'NaN';  
-          type_rt_stim = sprintf('%s_bothruns_std_rt',eventname);
-          behav.(type_rt_stim) = 'NaN'; 
-        
-          for j=1:2 % runs
-            type_counts_run = sprintf('%s_run_%d_numtrials',eventname,j);   
-            behav.(type_counts_run) = 'NaN'; 
-            type_acc_run = sprintf('%s_run_%d_rate',eventname,j);
-            behav.(type_acc_run) = 'NaN';        
-            type_rt_run = sprintf('%s_run_%d_mean_rt',eventname,j);   
-            behav.(type_rt_run) = 'NaN'; 
-            type_rt_run = sprintf('%s_run_%d_std_rt',eventname,j);
-            behav.(type_rt_run) = 'NaN';         
-          end
-
+% get valid response times
+function vals = get_rt(event_info)
+  vals = [];
+  if ~isfield(event_info, 'feedback_resp')
+    vals = {event_info.rt};
+  else
+    vals = [];
+    for k=1:length(event_info)
+      premature = get_premature(event_info(k));
+      if premature
+        vals{k} = [];
+      elseif event_info(k).acc
+        vals{k} = event_info(k).rt;
+      elseif event_info(k).text_display_rttime ~= 0
+        vals{k} = event_info(k).text_display_rttime - event_info(k).probe_onset;
+      elseif event_info(k).feedback_rttime ~= 0
+        vals{k} = event_info(k).feedback_rttime - event_info(k).probe_onset;
       end
-    end 
-  end
-  
-  % collapse across small or large 
-  collapse_cond = {'reward', 'loss'}; 
-  
-  for i=1:size(collapse_cond,2)
-    cond = collapse_cond{i}; 
-    type_counts_total = sprintf('hilo%s_total_bothruns_numtrials',cond); 
-    behav.(type_counts_total) = 'NaN'; 
-    type_rt_total = sprintf('hilo%s_total_bothruns_mean_rt',cond); 
-    behav.(type_rt_total) = 'NaN'; 
-    type_rt_total = sprintf('hilo%s_total_bothruns_std_rt',cond); 
-    behav.(type_rt_total) = 'NaN'; 
-    
-    for j=1:2 % runs
-     type_counts_run = sprintf('hilo%s_total_run_%d_numtrials',cond,j);    
-     behav.(type_counts_run) = 'NaN';
-     type_rt_run = sprintf('hilo%s_total_run_%d_mean_rt',cond,j);
-     behav.(type_rt_run) = 'NaN';
-     type_rt_run = sprintf('hilo%s_total_run_%d_std_rt',cond,j);
-     behav.(type_rt_run) = 'NaN';
-    end 
-   
-    for j=1:parms.nstims
-      stim = parms.stimnames{j}; 
-      eventname = sprintf('%s_%s',cond,stim);   
-    
-      switch stim
-        case 'pos_feedback'
-    
-          type_counts_stim = sprintf('hilo%s_bothruns_numtrials',eventname);
-          behav.(type_counts_stim) = 'NaN'; 
-          type_acc_stim = sprintf('hilo%s_bothruns_rate',eventname);
-          behav.(type_acc_stim) = 'NaN'; 
-          type_rt_stim = sprintf('hilo%s_bothruns_mean_rt',eventname);
-          behav.(type_rt_stim) = 'NaN'; 
-          type_rt_stim = sprintf('hilo%s_bothruns_std_rt',eventname);
-          behav.(type_rt_stim) = 'NaN';  
-          
-          for j=1:2 % runs
-            type_counts_run = sprintf('hilo%s_run_%d_numtrials',eventname,j);   
-            behav.(type_counts_run) = 'NaN'; 
-            type_acc_run = sprintf('hilo%s_run_%d_rate',eventname,j);
-            behav.(type_acc_run) = 'NaN'; 
-            type_rt_run = sprintf('hilo%s_run_%d_mean_rt',eventname,j);  
-            behav.(type_rt_run) = 'NaN';   
-            type_rt_run = sprintf('hilo%s_run_%d_std_rt',eventname,j);
-            behav.(type_rt_run) = 'NaN';
-          end 
-    
-        case 'neg_feedback'
-    
-          type_counts_stim = sprintf('hilo%s_bothruns_numtrials',eventname);
-          behav.(type_counts_stim) = 'NaN'; 
-          type_acc_stim = sprintf('hilo%s_bothruns_rate',eventname);
-          behav.(type_acc_stim) = 'NaN';  
-          type_rt_stim = sprintf('hilo%s_bothruns_mean_rt',eventname);  
-          behav.(type_rt_stim) = 'NaN'; 
-          type_rt_stim = sprintf('hilo%s_bothruns_std_rt',eventname);
-          behav.(type_rt_stim) = 'NaN'; 
-          
-          for j=1:2 % runs
-            type_counts_run = sprintf('hilo%s_run_%d_numtrials',eventname,j);     
-            behav.(type_counts_run) = 'NaN'; 
-            type_acc_run = sprintf('hilo%s_run_%d_rate',eventname,j);
-            behav.(type_acc_run) = 'NaN';        
-            type_rt_run = sprintf('hilo%s_run_%d_mean_rt',eventname,j);  
-            behav.(type_rt_run) = 'NaN';    
-            type_rt_run = sprintf('hilo%s_run_%d_std_rt',eventname,j);
-            behav.(type_rt_run) = 'NaN';
-          end         
-      end        
-    end
-  end
-  
-  % money 
-  behav.('earnings_total') = 'NaN'; 
-  for j=1:2 % runs
-    type_counts_run = sprintf('earnings_run_%d',j);  
-    behav.(type_counts_run) = 'NaN';   
-  end   
-    
-  % write to csv
-  fname_csv_out = sprintf('%s/%s_behavioral.csv',parms.outdir,parms.outstem); 
-  if ~exist(fname_csv_out,'file') || parms.forceflag
-    mmil_struct2csv(behav,fname_csv_out)
+    end;
   end;
-  
-return; 
+  if iscell(vals)
+    i_valid = find(~cellfun(@isempty,vals));
+    vals = cell2mat(vals(i_valid));
+  end;
+  vals = nonzeros(vals(~isnan(vals)));
+return
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-

@@ -70,8 +70,8 @@ if ~parms.errcode_nback
 else
   % get behav data and write it to a csv
   get_behavioral_data_rec_empty(parms);
-  fprintf('%s: ERROR: empty behavioral file created due to error with n-back file %s\n',...
-    mfilename,parms.fnamewm);
+  if parms.verbose, fprintf('%s: ERROR: empty behavioral file created due to error with n-back file %s\n',...
+    mfilename,parms.fnamewm); end
   errcode = 1;
   errmsg = 'error with n-back file';
 end % if errcode_nback 
@@ -172,8 +172,8 @@ function [event_info_wm,event_info_proc_wm,errcode,errmsg] = get_event_info_wm(p
            parms.fieldnameswm, parms.outdir, parms.forceflag, parms.verbose);
     event_info_wm = mmil_csv2struct(fnamewm_csv);
   catch me
-    fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
-      mfilename,parms.fnamewm,me.message);
+    if parms.verbose, fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
+      mfilename,parms.fnamewm,me.message); end
     errcode = 1;
     errmsg = 'failed to read e-prime file';
     return;
@@ -201,8 +201,8 @@ function [event_info_rec,event_info_proc_rec,errcode,errmsg] = get_event_info_re
             parms.fieldnamesrec, parms.outdir, parms.forceflag, parms.verbose);
     event_info_rec = mmil_csv2struct(fnamerec_csv); 
   catch me
-    fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
-      mfilename,parms.fnamerec,me.message);
+    if parms.verbose, fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
+      mfilename,parms.fnamerec,me.message); end
     errcode = 1;
     errmsg = 'failed to read e-prime file';
     return;
@@ -211,13 +211,13 @@ function [event_info_rec,event_info_proc_rec,errcode,errmsg] = get_event_info_re
   % check experiment
   experiment = mmil_getfield(event_info_rec(1),'experiment');
   if isempty(regexpi(experiment,'rec'))
-    fprintf('%s: ERROR: wrong experiment name in e-prime file %s: %s\n',...
-      mfilename,parms.fnamerec,experiment);
+    if parms.verbose, fprintf('%s: ERROR: wrong experiment name in e-prime file %s: %s\n',...
+      mfilename,parms.fnamerec,experiment); end
     errcode = 1;
     errmsg = 'wrong experiment name';
     return;
   else
-    fprintf('%s: experiment name: %s\n',mfilename,experiment);
+    if parms.verbose, fprintf('%s: experiment name: %s\n',mfilename,experiment); end
   end;
   
   % remove non-events
@@ -310,7 +310,7 @@ function [switch_flag,accuracy,errcode,errmsg] = rec_switch_flag(event_info,parm
   if parms.verbose, fprintf('%s: accuracy = %0.1f%%\n',mfilename,accuracy); end
 
   if accuracy == 0
-    fprintf('%s: ERROR: accuracy equals zero for %s\n',mfilename,parms.fnamerec);
+    if parms.verbose, fprintf('%s: ERROR: accuracy equals zero for %s\n',mfilename,parms.fnamerec); end
     errcode = 1;
     errmsg = 'accuracy equals zero';
     return; 

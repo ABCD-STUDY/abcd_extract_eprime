@@ -240,8 +240,8 @@ return;
 function [onset,offset] = check_offsets(onset,offset,eventname)
   ind_empty = find(cellfun(@isempty,onset) | cellfun(@isempty,offset));
   if ~isempty(ind_empty)
-    fprintf('%s: WARNING: %s event has %d onsets but %d offsets\n',...
-      mfilename,eventname,nnz(~cellfun(@isempty,onset)),nnz(~cellfun(@isempty,offset)));
+    if parms.verbose, fprintf('%s: WARNING: %s event has %d onsets but %d offsets\n',...
+      mfilename,eventname,nnz(~cellfun(@isempty,onset)),nnz(~cellfun(@isempty,offset))); end
     ind_keep = setdiff([1:length(onset)],ind_empty);
     onset = onset(ind_keep);
     offset = offset(ind_keep);
@@ -378,8 +378,8 @@ function [event_info,start_time,all_types,all_stims,all_targets,all_procs,errcod
                   parms.fieldnames, parms.outdir, parms.forceflag, parms.verbose);
     event_info = mmil_csv2struct(fname_csv);
   catch me
-    fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
-      mfilename,parms.fname,me.message);
+    if parms.verbose, fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
+      mfilename,parms.fname,me.message); end
     errcode = 1;
     errmsg = 'failed to read e-prime file';
     return; 
@@ -388,13 +388,13 @@ function [event_info,start_time,all_types,all_stims,all_targets,all_procs,errcod
   % check experiment
   experiment = mmil_getfield(event_info(1),'experiment');
   if isempty(regexpi(experiment,'nback'))
-    fprintf('%s: ERROR: wrong experiment name in e-prime file %s: %s\n',...
-      mfilename,parms.fname,experiment);
+    if parms.verbose, fprintf('%s: ERROR: wrong experiment name in e-prime file %s: %s\n',...
+      mfilename,parms.fname,experiment); end
     errcode = 1;
     errmsg = 'wrong experiment name';
     return;
   else
-    fprintf('%s: experiment name: %s\n',mfilename,experiment);
+    if parms.verbose, fprintf('%s: experiment name: %s\n',mfilename,experiment); end
   end;
   
   % get start times
@@ -422,8 +422,8 @@ function [event_info,start_time,all_types,all_stims,all_targets,all_procs,errcod
   correct_response = {event_info_events.correct_response};  
   if any(cellfun(@isstr,stim_resp)) || any(cellfun(@iscell,stim_resp))    
     if ~any(cellfun(@isstr,correct_response))
-      fprintf('%s: ERROR: string stim_resp values without string correct_response values in e-prime file %s\n',...
-        mfilename,parms.fname);
+      if parms.verbose, fprintf('%s: ERROR: string stim_resp values without string correct_response values in e-prime file %s\n',...
+        mfilename,parms.fname); end
       errcode = 1;
       errmsg = 'string stim_resp values without string correct_response values';
       return;
@@ -436,8 +436,8 @@ function [event_info,start_time,all_types,all_stims,all_targets,all_procs,errcod
     for i=1:length(uniq_correct_response)
       k = regexp(uniq_correct_response{i},'(?<num>\d+),{(?<name>\w+)}','names');
       if isempty(k)
-        fprintf('%s: ERROR: string correct_response with unexpected pattern (%s) in e-prime file %s\n',...
-          mfilename,uniq_correct_response{i},parms.fname);
+        if parms.verbose, fprintf('%s: ERROR: string correct_response with unexpected pattern (%s) in e-prime file %s\n',...
+          mfilename,uniq_correct_response{i},parms.fname); end
         errcode = 1;
         errmsg = 'string correct_response with unexpected pattern';
         return;
@@ -445,10 +445,7 @@ function [event_info,start_time,all_types,all_stims,all_targets,all_procs,errcod
       uniq_correct_response_nums(i) = str2num(k.num);
       uniq_correct_response_names{i} = k.name;
     end;
-    if parms.verbose
-      fprintf('%s: WARNING: replacing stim_resp strings with numeric\n',...
-        mfilename);
-    end;
+    if parms.verbose, fprintf('%s: WARNING: replacing stim_resp strings with numeric\n', mfilename); end
     for i=1:length(event_info)
       % assign numbers to each stim_resp
       stim_resp = event_info(i).stim_resp;
@@ -525,7 +522,7 @@ function [switch_flag,accuracy,errcode,errmsg] = nback_switch_flag(event_info,pa
   if parms.verbose, fprintf('%s: accuracy = %0.1f%%\n',mfilename,accuracy); end
 
   if accuracy == 0
-    fprintf('%s: ERROR: accuracy equals zero for %s\n',mfilename,parms.fname);
+    if parms.verbose, fprintf('%s: ERROR: accuracy equals zero for %s\n',mfilename,parms.fname); end
     errcode = 1; 
     errmsg = 'accuracy equals zero';
     return; 
@@ -594,7 +591,7 @@ function [behav,runs_ok,errcode,errmsg] = get_behavioral_data_nback(event_info,p
     event_info = event_info(new_info);
     ind_start = ind_start(new_info); 
   elseif nruns == 0
-    fprintf('%s: ERROR: no valid e-prime runs in %s\n',mfilename,parms.fname); 
+    if parms.verbose, fprintf('%s: ERROR: no valid e-prime runs in %s\n',mfilename,parms.fname); end
     errcode = 1;
     errmsg = 'no valid e-prime runs';
     return;

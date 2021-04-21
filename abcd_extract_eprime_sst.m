@@ -202,8 +202,8 @@ function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms
                   parms.fieldnames, parms.outdir, parms.forceflag, parms.verbose);
     event_info = mmil_csv2struct(fname_csv);
   catch me
-    fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
-      mfilename,parms.fname,me.message);
+    if parms.verbose, fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
+      mfilename,parms.fname,me.message); end
     errcode = 1;
     errmsg = 'failed to read e-prime file';
     return;
@@ -212,13 +212,13 @@ function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms
   % check experiment
   experiment = mmil_getfield(event_info(1),'experiment');
   if isempty(regexpi(experiment,'sst'))
-    fprintf('%s: ERROR: wrong experiment name in e-prime file %s: %s\n',...
-      mfilename,parms.fname,experiment);
+    if parms.verbose, fprintf('%s: ERROR: wrong experiment name in e-prime file %s: %s\n',...
+      mfilename,parms.fname,experiment); end
     errcode = 1;
     errmsg = 'wrong experiment name';
     return;
   else
-    fprintf('%s: experiment name: %s\n',mfilename,experiment);
+    if parms.verbose, fprintf('%s: experiment name: %s\n',mfilename,experiment); end
   end;
   
   % get start times
@@ -239,8 +239,8 @@ function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms
      any(cellfun(@isstr,fix_resp)) || any(cellfun(@iscell,fix_resp)) ||...
      any(cellfun(@isstr,stop_resp)) || any(cellfun(@iscell,stop_resp))     
     if ~any(cellfun(@isstr,go_cresp))
-      fprintf('%s: ERROR: string go_resp values without string go_cresp values in e-prime file %s\n',...
-        mfilename,parms.fname);
+      if parms.verbose, fprintf('%s: ERROR: string go_resp values without string go_cresp values in e-prime file %s\n',...
+        mfilename,parms.fname); end
       errcode = 1;
       errmsg = 'string go_resp values without string go_cresp values';
       return;
@@ -254,8 +254,8 @@ function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms
       %   allow either '1{LEFTARROW}' or '1,{LEFTARROW}'
       k = regexp(uniq_go_cresp{i},'(?<num>\d+),?{(?<name>\w+)}','names');
       if isempty(k)
-        fprintf('%s: ERROR: string go_cresp with unexpected pattern (%s) in e-prime file %s\n',...
-          mfilename,uniq_go_cresp{i},parms.fname);
+        if parms.verbose, fprintf('%s: ERROR: string go_cresp with unexpected pattern (%s) in e-prime file %s\n',...
+          mfilename,uniq_go_cresp{i},parms.fname); end
         errcode = 1;
         errmsg = 'string go_cresp with unexpected pattern';
         return;
@@ -264,8 +264,7 @@ function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms
       uniq_go_cresp_names{i} = k.name;
     end;
     if parms.verbose
-      fprintf('%s: WARNING: replacing go_resp strings with numeric\n',...
-        mfilename);
+      if parms.verbose, fprintf('%s: WARNING: replacing go_resp strings with numeric\n', mfilename); end
     end;
     for i=1:length(event_info)
       % assign numbers to each go_resp
@@ -297,10 +296,7 @@ function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms
   
   % check go_cresp
   if any(cellfun(@isstr,{event_info.go_cresp}))
-    if parms.verbose
-      fprintf('%s: WARNING: replacing go_cresp strings with numeric\n',...
-        mfilename);
-    end;
+    if parms.verbose, fprintf('%s: WARNING: replacing go_cresp strings with numeric\n', mfilename); end
     for i=1:length(event_info)
       if isstr(event_info(i).go_cresp)
         % remove text description of response
@@ -385,7 +381,7 @@ function [switch_flag,accuracy,errcode,errmsg] = sst_switch_flag(event_info,parm
   if parms.verbose, fprintf('%s: accuracy = %0.1f%%\n',mfilename,accuracy); end
   
   if accuracy == 0
-    fprintf('%s: ERROR: accuracy equals zero for %s\n',mfilename,parms.fname);
+    if parms.verbose, fprintf('%s: ERROR: accuracy equals zero for %s\n',mfilename,parms.fname); end
     errcode = 1;
     errmsg = 'accuracy equals zero';
     return; 
@@ -527,8 +523,8 @@ return;
 function [onset,offset] = check_offsets(onset,offset,eventname)
   ind_empty = find(cellfun(@isempty,onset) | cellfun(@isempty,offset));
   if ~isempty(ind_empty)
-    fprintf('%s: WARNING: %s event has %d onsets but %d offsets\n',...
-      mfilename,eventname,nnz(~cellfun(@isempty,onset)),nnz(~cellfun(@isempty,offset)));
+    if parms.verbose, fprintf('%s: WARNING: %s event has %d onsets but %d offsets\n',...
+      mfilename,eventname,nnz(~cellfun(@isempty,onset)),nnz(~cellfun(@isempty,offset))); end
     ind_keep = setdiff([1:length(onset)],ind_empty);
     onset = onset(ind_keep);
     offset = offset(ind_keep);
@@ -681,7 +677,7 @@ function [behav,runs_ok,errcode,errmsg] = get_behavioral_data(event_info,parms,a
     event_info = event_info(new_info);
     runs = runs(new_info);
   elseif nruns == 0
-   fprintf('%s: ERROR: no valid e-prime runs in %s\n',mfilename,parms.fname); 
+   if parms.verbose, fprintf('%s: ERROR: no valid e-prime runs in %s\n',mfilename,parms.fname); end
    errcode = 1;
    errmsg = 'no valid e-prime runs';
    return;
