@@ -40,8 +40,8 @@ function [eprime_nruns,errcode,behav,errmsg] = abcd_extract_eprime_sst(fname,var
 % Prev Mod: 02/12/19 by Dani Cornejo
 % Prev Mod: 03/12/19 by Feng Xue
 % Prev Mod: 08/05/19 by Octavio Ruiz
-% Prev Mod: 08/27/20 by Don Hagler
-% Last Mod: 11/03/20 by Don Hagler
+% Prev Mod: 11/03/20 by Don Hagler
+% Last Mod: 05/03/21 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -114,7 +114,7 @@ if parms.timing_files_flag && eprime_nruns
         parms.mindur = 0.08;  
         onset  = {event_info(ind_type).(['go_onset_time'])};
         offset = {event_info(ind_type).(['go_offset_time'])};    
-        [onset,offset] = check_offsets(onset,offset,event);
+        [onset,offset] = check_offsets(onset,offset,event,parms);
       case 'stop'
         % get times of stim onset and offset
         parms.mindur = 0;  
@@ -520,10 +520,10 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [onset,offset] = check_offsets(onset,offset,eventname)
+function [onset,offset] = check_offsets(onset,offset,eventname,parms)
   ind_empty = find(cellfun(@isempty,onset) | cellfun(@isempty,offset));
   if ~isempty(ind_empty)
-    if parms.verbose, fprintf('%s: WARNING: %s event has %d onsets but %d offsets\n',...
+    if parms.verbose, fprintf('%s: WARNING: %s event has %d onsets and %d offsets\n',...
       mfilename,eventname,nnz(~cellfun(@isempty,onset)),nnz(~cellfun(@isempty,offset))); end
     ind_keep = setdiff([1:length(onset)],ind_empty);
     onset = onset(ind_keep);

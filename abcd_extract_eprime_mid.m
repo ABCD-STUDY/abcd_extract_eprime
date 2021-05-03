@@ -37,10 +37,9 @@ function [eprime_nruns,errcode,behav,errmsg] = abcd_extract_eprime_mid(fname,var
 % Created:  10/07/16 by Don Hagler
 % Prev Mod: 01/23/19 by Dani Cornejo
 % Prev Mod: 08/05/19 by Octavio Ruiz
-% Prev Mod: 11/03/20 by Don Hagler
 % Prev Mod: 03/31/21 by Emma Pearson, Anthony Juliano, and Bader Chaarani at UVM
-% Prev Mod: 04/06/21 by Don Hagler
-% Last Mod: 04/16/21 by Don Hagler
+% Prev Mod: 04/16/21 by Don Hagler
+% Last Mod: 05/03/21 by Don Hagler
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -202,7 +201,7 @@ function [onset,offset] = check_offsets(onset,offset,eventname,parms)
   ind_empty = find(cellfun(@isempty,onset) | cellfun(@isempty,offset));
   if ~isempty(ind_empty)
     if parms.verbose
-      fprintf('%s: WARNING: %s event has %d onsets but %d offsets\n',...
+      fprintf('%s: WARNING: %s event has %d onsets and %d offsets\n',...
         mfilename,eventname,nnz(~cellfun(@isempty,onset)),nnz(~cellfun(@isempty,offset)));
     end
     ind_keep = setdiff([1:length(onset)],ind_empty);
@@ -965,7 +964,7 @@ return;
 function premature = get_premature(event_info)
   premature = 0;
   response_check = mmil_getfield(event_info,'response_check');
-  if strcmp(event_info.response_check,'You pressed too soon!'), premature = 1; end
+  if strcmp(response_check,'You pressed too soon!'), premature = 1; end
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

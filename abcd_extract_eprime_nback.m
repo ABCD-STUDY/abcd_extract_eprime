@@ -45,8 +45,8 @@ function [eprime_nruns,errcode,behav,errmsg] = abcd_extract_eprime_nback(fname,v
 % Prev Mod: 01/23/19 by Dani Cornejo
 % Prev Mod: 01/29/20 by Don Hagler
 % Prev Mod: 05/13/20 by Octavio Ruiz
-% Prev Mod: 08/28/20 by Don Hagler
-% Last Mod: 11/03/20 by Don Hagler
+% Prev Mod: 11/03/20 by Don Hagler
+% Last Mod: 05/03/21 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -112,7 +112,7 @@ if parms.timing_files_flag && eprime_nruns
         % get times of stim onset and offset
         onset = {event_info(ind_inter).stim_onset}; 
         offset = {event_info(ind_inter).stim_offset};
-        [onset,offset] = check_offsets(onset,offset,eventname);
+        [onset,offset] = check_offsets(onset,offset,eventname,parms);
         % find most recent start time for each event
         [ind_start,event_ref_time] = set_ref(onset,start_time); 
         % create files for each scan
@@ -131,7 +131,7 @@ if parms.timing_files_flag && eprime_nruns
     % offset of stimulus block cue
     tmp_offset = {event_info_proc(ind_cues).([parms.cuenames{i} '_offset'])};
     % check for empty onset/offset values
-    [tmp_onset,tmp_offset] = check_offsets(tmp_onset,tmp_offset,eventname);
+    [tmp_onset,tmp_offset] = check_offsets(tmp_onset,tmp_offset,eventname,parms);
     % concatenate with other cue trials    
     onset = [onset tmp_onset];
     offset = [offset tmp_offset];
@@ -237,10 +237,10 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [onset,offset] = check_offsets(onset,offset,eventname)
+function [onset,offset] = check_offsets(onset,offset,eventname,parms)
   ind_empty = find(cellfun(@isempty,onset) | cellfun(@isempty,offset));
   if ~isempty(ind_empty)
-    if parms.verbose, fprintf('%s: WARNING: %s event has %d onsets but %d offsets\n',...
+    if parms.verbose, fprintf('%s: WARNING: %s event has %d onsets and %d offsets\n',...
       mfilename,eventname,nnz(~cellfun(@isempty,onset)),nnz(~cellfun(@isempty,offset))); end
     ind_keep = setdiff([1:length(onset)],ind_empty);
     onset = onset(ind_keep);
