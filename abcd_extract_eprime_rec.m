@@ -28,8 +28,10 @@ function [errcode,behav,errmsg] = abcd_extract_eprime_rec(fnamewm,fnamerec,varar
 % Created : 11/16/17 by Dani Cornejo 
 % Prev Mod: 01/23/19 by Dani Cornejo
 % Prev Mod: 05/21/20 by Octavio Ruiz
-% Prev Mod: 08/28/20 by Don Hagler
-% Last Mod: 11/03/20 by Don Hagler
+% Prev Mod: 11/03/20 by Don Hagler
+% Prev Mod: 08/31/21 by Don Hagler
+% Last Mod: 02/10/22 by Octavio Ruiz
+% Last Mod: 04/22/22 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -172,10 +174,10 @@ function [event_info_wm,event_info_proc_wm,errcode,errmsg] = get_event_info_wm(p
            parms.fieldnameswm, parms.outdir, parms.forceflag, parms.verbose);
     event_info_wm = mmil_csv2struct(fnamewm_csv);
   catch me
-    if parms.verbose, fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
+    if parms.verbose, fprintf('%s: ERROR: failed to read or interpret e-prime file %s:\n%s\n',...
       mfilename,parms.fnamewm,me.message); end
     errcode = 1;
-    errmsg = 'failed to read e-prime file';
+    errmsg = 'failed to read or interpret e-prime file';
     return;
   end
   
@@ -201,10 +203,10 @@ function [event_info_rec,event_info_proc_rec,errcode,errmsg] = get_event_info_re
             parms.fieldnamesrec, parms.outdir, parms.forceflag, parms.verbose);
     event_info_rec = mmil_csv2struct(fnamerec_csv); 
   catch me
-    if parms.verbose, fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
+    if parms.verbose, fprintf('%s: ERROR: failed to read or interpret e-prime file %s:\n%s\n',...
       mfilename,parms.fnamerec,me.message); end
     errcode = 1;
-    errmsg = 'failed to read e-prime file';
+    errmsg = 'failed to read or interpret e-prime file';
     return;
   end
   
@@ -370,22 +372,35 @@ function behav = get_behavioral_data_rec(event_info_wm,event_info_rec,parms)
   
   behav = []; 
   behav.('SubjID') = []; behav.('VisitID') = []; 
+  behav.version = mmil_getfield(event_info_rec(1),'version','UNKNOWN');
+  if parms.verbose
+    fprintf('%s: experiment version = %s\n',mfilename,behav.version);
+  end
   behav.switch_flag = parms.switch_flag;
   
   pictures = []; 
-  
+
+  % get stim types for each trial in wm task  
   all_types_wm = {event_info_wm.block_type}; 
   all_stims_wm = {event_info_wm.stim_type}; 
   all_targets_wm = {event_info_wm.target_type};
   all_pics_wm = {event_info_wm.stim}; 
-    
+  
+  % replace empty values with 'none'  
+  i_emp = find(cellfun(@isempty,all_stims_wm));
+  if ~isempty(i_emp)
+    all_stims_wm(i_emp) = repmat({'none'},size(i_emp));
+    all_targets_wm(i_emp) = repmat({'none'},size(i_emp));
+    all_pics_wm(i_emp) = repmat({'none'},size(i_emp));
+  end
+  
   for i=1:parms.nconds
     type = parms.typenames{i}; 
     cond = parms.condnames{i}; 
     ind_type = find(strcmp(type,all_types_wm));
     
     for j=1:parms.nstims
-      stim = parms.stimnames{j}; 
+      stim = parms.stimnames{j};
       ind_stim = find(strcmp(stim,lower(all_stims_wm)));
     
       for k=1:parms.nextrastims
@@ -500,7 +515,9 @@ function get_behavioral_data_rec_empty(parms)
   
   behav = []; 
   behav.('SubjID') = []; behav.('VisitID') = []; 
+  behav.version = [];
   behav.switch_flag = 0;
+  behav.version = [];
   
   for l=1:parms.nrec
     rectype = parms.recnames{l}; 

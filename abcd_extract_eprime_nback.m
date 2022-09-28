@@ -45,8 +45,10 @@ function [eprime_nruns,errcode,behav,errmsg] = abcd_extract_eprime_nback(fname,v
 % Prev Mod: 01/23/19 by Dani Cornejo
 % Prev Mod: 01/29/20 by Don Hagler
 % Prev Mod: 05/13/20 by Octavio Ruiz
-% Prev Mod: 11/03/20 by Don Hagler
-% Last Mod: 05/03/21 by Don Hagler
+% Prev Mod: 05/03/21 by Don Hagler
+% Prev Mod: 08/18/21 by Don Hagler
+% Last Mod: 02/10/22 by Octavio Ruiz
+% Last Mod: 04/22/22 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -378,10 +380,10 @@ function [event_info,start_time,all_types,all_stims,all_targets,all_procs,errcod
                   parms.fieldnames, parms.outdir, parms.forceflag, parms.verbose);
     event_info = mmil_csv2struct(fname_csv);
   catch me
-    if parms.verbose, fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
+    if parms.verbose, fprintf('%s: ERROR: failed to read or interpret e-prime file %s:\n%s\n',...
       mfilename,parms.fname,me.message); end
     errcode = 1;
-    errmsg = 'failed to read e-prime file';
+    errmsg = 'failed to read or interpret e-prime file';
     return; 
   end
   
@@ -522,6 +524,7 @@ function [switch_flag,accuracy,errcode,errmsg] = nback_switch_flag(event_info,pa
   if parms.verbose, fprintf('%s: accuracy = %0.1f%%\n',mfilename,accuracy); end
 
   if accuracy == 0
+    %% todo: create flag to mark missing responses, do not set errcode
     if parms.verbose, fprintf('%s: ERROR: accuracy equals zero for %s\n',mfilename,parms.fname); end
     errcode = 1; 
     errmsg = 'accuracy equals zero';
@@ -567,10 +570,14 @@ function [behav,runs_ok,errcode,errmsg] = get_behavioral_data_nback(event_info,p
   errcode = 0; errmsg = [];
   
   behav = []; 
-  behav.('SubjID') = []; behav.('VisitID') = []; 
+  behav.('SubjID') = []; behav.('VisitID') = [];
+  behav.version = mmil_getfield(event_info(1),'version','UNKNOWN');
+  if parms.verbose
+    fprintf('%s: experiment version = %s\n',mfilename,behav.version);
+  end
   behav.switch_flag = parms.switch_flag;
   behav.perform_flag = 1;
-  
+
   % check if second runs is truncated 
   onset_all = [event_info.stim_onset];
   [ind_start,~] = set_ref(onset_all,start_time);   
@@ -582,7 +589,7 @@ function [behav,runs_ok,errcode,errmsg] = get_behavioral_data_nback(event_info,p
     if run_len == 80 % hardcode the run length for now
       runs_ok = [runs_ok i];  
     else 
-      if parms.verbose, fprintf('%s: run %d is short: %d trials found (<80 trials) \n',mfilename,i,run_len); end
+      if parms.verbose, fprintf('%s: WARNING: run %d is short: %d trials found (<80 trials) \n',mfilename,i,run_len); end
     end 
   end
   nruns = length(runs_ok);  
@@ -843,7 +850,8 @@ return;
 function get_behavioral_data_nback_empty(parms) 
   
   behav = []; 
-  behav.('SubjID') = []; behav.('VisitID') = []; 
+  behav.('SubjID') = []; behav.('VisitID') = [];
+  behav.version = [];
   behav.switch_flag = 0; 
   behav.perform_flag = 0; 
   behav.nruns = 0; 

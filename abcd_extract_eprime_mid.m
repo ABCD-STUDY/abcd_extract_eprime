@@ -38,8 +38,12 @@ function [eprime_nruns,errcode,behav,errmsg] = abcd_extract_eprime_mid(fname,var
 % Prev Mod: 01/23/19 by Dani Cornejo
 % Prev Mod: 08/05/19 by Octavio Ruiz
 % Prev Mod: 03/31/21 by Emma Pearson, Anthony Juliano, and Bader Chaarani at UVM
-% Prev Mod: 04/16/21 by Don Hagler
-% Last Mod: 05/03/21 by Don Hagler
+% Prev Mod: 05/03/21 by Don Hagler
+% Prev Mod: 08/18/21 by Don Hagler
+% Prev Mod: 02/10/22 by Octavio Ruiz
+% Prev Mod: 04/22/22 by Don Hagler
+% Last Mod: 06/27/22 by Don Hagler
+%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -142,7 +146,7 @@ function parms = check_input(fname,options)
     'eprime_nruns',0,0:2,...
     'min_run_resps',20,[],...
     ...
-    'colnames',  {'NARGUID','SessionDate','SessionTime','ExperimentName','MIDVERSION',...
+    'colnames',  {'NARGUID','SessionDate','SessionTime','ExperimentName','ExperimentVersion',...
                   'Block','SubTrial','Condition','PrepTime.OnsetTime','PrepTime.OffsetTime',...
                   'Cue.OnsetTime','Anticipation.OnsetTime','Probe.OnsetTime','Feedback.OnsetTime',...
                   'Cue.OffsetTime','Anticipation.OffsetTime','Probe.OffsetTime','Feedback.OffsetTime','ResponseCheck',...
@@ -203,6 +207,7 @@ function [onset,offset] = check_offsets(onset,offset,eventname,parms)
     if parms.verbose
       fprintf('%s: WARNING: %s event has %d onsets and %d offsets\n',...
         mfilename,eventname,nnz(~cellfun(@isempty,onset)),nnz(~cellfun(@isempty,offset)));
+      % NOTE: this may indicate file truncation
     end
     ind_keep = setdiff([1:length(onset)],ind_empty);
     onset = onset(ind_keep);
@@ -327,10 +332,10 @@ function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms
                   parms.fieldnames, parms.outdir, parms.forceflag, parms.verbose);
     event_info = mmil_csv2struct(fname_csv);
   catch me
-    if parms.verbose, fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
+    if parms.verbose, fprintf('%s: ERROR: failed to read or interpret e-prime file %s:\n%s\n',...
       mfilename,parms.fname,me.message); end
     errcode = 1;
-    errmsg = 'failed to read e-prime file';
+    errmsg = 'failed to read or interpret e-prime file';
     return; 
   end
   
@@ -541,6 +546,10 @@ function [behav,runs_ok,errcode,errmsg] = get_behav_feedback(event_info,start_ti
   
   behav = [];
   behav.('SubjID') = []; behav.('VisitID') = []; 
+  behav.version = mmil_getfield(event_info(1),'version','UNKNOWN');
+  if parms.verbose
+    fprintf('%s: experiment version = %s\n',mfilename,behav.version);
+  end
   behav.switch_flag = 0; 
   behav.feedback_flag = 1;
   behav.perform_flag = 1;
@@ -554,11 +563,16 @@ function [behav,runs_ok,errcode,errmsg] = get_behav_feedback(event_info,start_ti
 
   runs_ok = []; 
   for i=1:nruns
-    run_len = length(find(runs==i));   
+    % check for file truncation
+    money = get_money(event_info,1);
+    if isnan(money(end)) && parms.verbose
+      fprintf('%s: WARNING: missing money value indicates file truncation\n',mfilename);
+    end
+    run_len = length(find(runs==i & ~isnan(money)));
     if run_len == 50 % require expected run length
      runs_ok = [runs_ok i];  
-    else 
-     if parms.verbose, fprintf('%s: run %d is short: %d trials found (<50 trials) \n',mfilename,i,run_len); end
+    else
+     if parms.verbose, fprintf('%s: WARNING: run %d is short: %d trials found (<50 trials) \n',mfilename,i,run_len); end
     end 
   end
   nruns = length(runs_ok); 
@@ -799,7 +813,7 @@ function [behav,runs_ok,errcode,errmsg] = get_behav_feedback(event_info,start_ti
       behav.(type_rt_run) = NaN;
       type_rt_run = sprintf('hilo%s_total_run_%d_std_rt',cond,j);
       behav.(type_rt_run) = NaN;
-    end 
+    end
     for j=runs_ok
       type_counts_run = sprintf('hilo%s_total_run_%d_numtrials',cond,j); 
       ind_type_run = [intersect(find(runs==j),collapse_ind_type.(cond))];    
@@ -862,10 +876,10 @@ function [behav,runs_ok,errcode,errmsg] = get_behav_feedback(event_info,start_ti
             behav.(type_rt_run) = mean(rt_keep);    
             type_rt_run = sprintf('hilo%s_run_%d_std_rt',eventname,j);
             behav.(type_rt_run) = std(rt_keep);
-          end 
+          end
 
         case 'neg_feedback'
-    
+
           ind_keep = find(acc==0); 
           ind_type = collapse_ind_type.(cond); 
           type_counts_stim = sprintf('hilo%s_bothruns_numtrials',eventname);
@@ -885,14 +899,14 @@ function [behav,runs_ok,errcode,errmsg] = get_behav_feedback(event_info,start_ti
           else
             behav.(type_rt_stim) = NaN;
           end
-          
+
           for j=1:2 % runs
             type_counts_run = sprintf('hilo%s_run_%d_numtrials',eventname,j);     
-            behav.(type_counts_run) = NaN; 
+            behav.(type_counts_run) = NaN;
             type_acc_run = sprintf('hilo%s_run_%d_rate',eventname,j);
-            behav.(type_acc_run) = NaN;        
-            type_rt_run = sprintf('hilo%s_run_%d_mean_rt',eventname,j);  
-            behav.(type_rt_run) = NaN;    
+            behav.(type_acc_run) = NaN;
+            type_rt_run = sprintf('hilo%s_run_%d_mean_rt',eventname,j);
+            behav.(type_rt_run) = NaN;
             type_rt_run = sprintf('hilo%s_run_%d_std_rt',eventname,j);
             behav.(type_rt_run) = NaN;
           end
@@ -921,16 +935,16 @@ function [behav,runs_ok,errcode,errmsg] = get_behav_feedback(event_info,start_ti
     end
   end
   
-  % money 
-  money = [event_info.money]; 
+  % money
+  money = get_money(event_info);
   behav.('earnings_total') = sum(money); 
   for j=1:2 % runs
     type_counts_run = sprintf('earnings_run_%d',j);  
     behav.(type_counts_run) = NaN;   
-  end   
+  end
   for j=runs_ok
-    type_counts_run = sprintf('earnings_run_%d',j);  
-    behav.(type_counts_run) = sum(money(find(runs==j)));   
+    type_counts_run = sprintf('earnings_run_%d',j);
+    behav.(type_counts_run) = sum(money(find(runs==j)));
   end   
 
   % check responses
@@ -1044,3 +1058,23 @@ function vals = get_rt(event_info)
 return
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% get vector of money values and replace empty with 0
+function money = get_money(event_info,nanflag)
+  if ~exist('nanflag','var') || isempty(nanflag), nanflag = 0; end
+  money = {event_info.money};
+  % check for missing value and replace with NaN or 0
+  i_emp = find(cellfun(@isempty,money));
+  if nanflag
+    money(i_emp) = repmat({NaN},size(i_emp));
+  else
+    money(i_emp) = repmat({0},size(i_emp));
+  end
+  % check for string (e.g., '?') and replace with 0
+  i_str = find(cellfun(@ischar,money));
+  money(i_str) = repmat({0},size(i_str));
+  money = cell2mat(money);
+return
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+

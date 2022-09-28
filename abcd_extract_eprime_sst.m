@@ -36,20 +36,31 @@ function [eprime_nruns,errcode,behav,errmsg] = abcd_extract_eprime_sst(fname,var
 %    behav: behavioral data
 %    errmsg: string describing error if errcode=1
 %
+%    Since January 2022, behav includes "glitch" variables
+%    defined by Hugh Caravan et al
+
 % Created:  10/07/16 by Don Hagler
 % Prev Mod: 02/12/19 by Dani Cornejo
 % Prev Mod: 03/12/19 by Feng Xue
 % Prev Mod: 08/05/19 by Octavio Ruiz
-% Prev Mod: 11/03/20 by Don Hagler
-% Last Mod: 05/03/21 by Don Hagler
+% Prev Mod: 05/03/21 by Don Hagler
+% Prev Mod: 08/31/21 by Don Hagler
+% Prev Mod: 01/12/22 by Octavio Ruiz
+% Prev Mod: 01/14/22 by Octavio Ruiz
+% Prev Mod: 02/10/22 by Octavio Ruiz
+% Prev Mod: 04/22/22 by Don Hagler
+% Prev Mod: 05/02/22 by Don Hagler
+% Last Mod: 06/27/22 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-% NOTE: Based on make-SST-refs.py provided by Michael Michael Riedel, Ph.D.
-%       miriedel@fiu.edu. 
-%       Using style from abcd_extract_eprime_mid.m provided by Donald
-%       Hagler, Ph.D. dhagler@mail.ucsd.edu.  
+% NOTE: Based on make-SST-refs.py
+%         provided by Michael Michael Riedel, Ph.D. from FIU
+%       Using style from abcd_extract_eprime_mid.m
+%         provided by Donald J Hagler, Ph.D.
+%       Includes code for glitch and violator variables by Octavio Ruiz
+%         adapted from python code provided by Sage Hahn from UVM
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -155,13 +166,13 @@ function parms = check_input(fname,options)
                   'Go.RT', 'Fix.RT', 'StopSignal.RT','Go.Duration', 'SSDDur',...
                   'StopSignal.Duration','SSD.RT', 'Go.OnsetTime', 'Go.OffsetTime',  'Go.ACC' , 'Go.RESP',...
                   'Fix.RESP', 'SSD.OnsetTime','StopSignal.StartTime','SSD.OffsetTime','StopSignal.ACC', 'Go.CRESP',...
-                  'StopSignal.RESP', 'SSD.ACC','TrialCode'},[],...
+                  'StopSignal.RESP', 'SSD.ACC','TrialCode', 'SSD.RESP' },[],...
     'fieldnames',{'narguid','date','time','experiment','version',...
                   'subject','procedure_block','block','trial','getready_rttime','beginfix_st',...
                   'go_rt','fix_rt','stop_rt','go_dur','ssd_dur',...
                   'stop_dur','ssd_rt','go_onset_time','go_offset_time' , 'go_acc','go_resp',...
                   'fix_resp', 'ssd_onset_time','stop_start_time','ssd_offset_time','stop_acc','go_cresp',...
-                  'stop_resp', 'ssd_acc', 'type'},[],...
+                  'stop_resp', 'ssd_acc', 'type', 'ssd_resp' },[],...
     'typenames',{'CorrectGo', 'CorrectLateGo', 'IncorrectGo', 'IncorrectLateGo','NoRespGo',... 
                  'CorrectStop', 'IncorrectStop','SSDStop'},[],...
     'condnames',{'correct_go','correctlate_go', 'incorrect_go', 'incorrectlate_go' ...
@@ -202,10 +213,10 @@ function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms
                   parms.fieldnames, parms.outdir, parms.forceflag, parms.verbose);
     event_info = mmil_csv2struct(fname_csv);
   catch me
-    if parms.verbose, fprintf('%s: ERROR: failed to read e-prime file %s:\n%s\n',...
+    if parms.verbose, fprintf('%s: ERROR: failed to read or interpret e-prime file %s:\n%s\n',...
       mfilename,parms.fname,me.message); end
     errcode = 1;
-    errmsg = 'failed to read e-prime file';
+    errmsg = 'failed to read or interpret e-prime file';
     return;
   end
   
@@ -291,6 +302,14 @@ function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms
         stop_resp = uniq_go_cresp_nums(k);
       end;
       event_info(i).stop_resp = stop_resp;
+      % assign numbers to each ssd_resp
+      ssd_resp = event_info(i).ssd_resp;
+      if iscell(ssd_resp), ssd_resp = ssd_resp{1}; end;
+      if isstr(ssd_resp)
+        k = find(strcmp(ssd_resp,uniq_go_cresp_names));
+        ssd_resp = uniq_go_cresp_nums(k);
+      end;
+      event_info(i).ssd_resp = ssd_resp;
     end;
   end;
   
@@ -354,6 +373,7 @@ function event_info = sst_switch_event(event_info)
     event_info(i).go_resp = switch_val(event_info(i).go_resp);
     event_info(i).fix_resp = switch_val(event_info(i).fix_resp);
     event_info(i).stop_resp = switch_val(event_info(i).stop_resp);
+    event_info(i).ssd_resp = switch_val(event_info(i).ssd_resp);
   end
   event_info = sst_acc(event_info);
 return;
@@ -642,9 +662,13 @@ function [behav,runs_ok,errcode,errmsg] = get_behavioral_data(event_info,parms,a
 
   behav = []; 
   behav.('SubjID') = []; behav.('VisitID') = []; 
+  behav.version = mmil_getfield(event_info(1),'version','UNKNOWN');
+  if parms.verbose
+    fprintf('%s: experiment version = %s\n',mfilename,behav.version);
+  end
   behav.switch_flag = parms.switch_flag;
   behav.perform_flag = 1;
-  
+
   blocks = [event_info.block]; 
   trials = [event_info.trial]; 
   % determine version of task
@@ -662,10 +686,10 @@ function [behav,runs_ok,errcode,errmsg] = get_behavioral_data(event_info,parms,a
   runs_ok = []; 
   for i=1:nruns
     run_len = length(find(runs==i));     
-    if run_len == 182 %hardcode the run lenght for now
+    if run_len == 182 % hardcode the run length for now
      runs_ok = [runs_ok i];  
     else 
-     if parms.verbose, fprintf('%s: run %d is short: %d trials found (<182 trials) \n',mfilename,i,run_len); end
+     if parms.verbose, fprintf('%s: WARNING: run %d is short: %d trials found (<182 trials) \n',mfilename,i,run_len); end
     end 
   end
   nruns = length(runs_ok); 
@@ -839,6 +863,248 @@ function [behav,runs_ok,errcode,errmsg] = get_behavioral_data(event_info,parms,a
     if parms.verbose, fprintf('%s: CorrectGo_rt_total < IncorrectStop_rt_total \n',mfilename);end
     behav.perform_flag = 0;
   end;
+
+  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  %% NOTE: section below by Octavio Ruiz, 22jan12
+  %%  Based on python script eprime_funcs.py by Sage Hahn from Hugh Garavan's lab at UVM
+  %%  Reproduces the functions called by the loop inside the function process_event(event, files)
+  %%
+  %% todo: move section below to new subfunction
+  %%       check for redundancy (does it calculate variables that have already been set?)
+  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+  behav.SSRT_integrated_total = NaN;
+  behav.violatorflag = NaN;
+  behav.glitchflag = NaN;
+  behav.zeroSSDcount = NaN;
+  
+  tfmri_sst_all_beh_total_issrt = NaN;
+  tfmri_sst_beh_glitchflag = NaN;
+  tfmri_sst_beh_glitchcnt = NaN;
+  tfmri_sst_beh_0SSDcount = NaN;
+  tfmri_sst_beh_0SSD_flag = NaN;  % called "tfmri_sst_beh_0SSD>20flag" in Sage's script
+  tfmri_sst_beh_violatorflag = NaN;
+  
+  % set_correct_go
+  manynans = num2cell(NaN(1,length(event_info)));
+  [event_info.('correct_go_response')] = manynans{:};
+
+  inds = cellfun(@(x,y)(~isempty(x) & (x==y)),...
+                  {event_info.go_resp}, {event_info.go_cresp}, 'UniformOutput',0);
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+%   fprintf('num_correct_go_response_1 = %.0f\n', length(inds))
+  %% todo: is there a way to do this without looping? (deal?)
+  for i = 1:length(inds)
+    j = inds(i);
+    event_info(j).correct_go_response = 1.0;
+  end
+  
+  inds = cellfun(@(x,y,z)( isempty(x) & (y==z)),...
+                  {event_info.go_resp}, {event_info.go_cresp}, {event_info.fix_resp},'UniformOutput',0);
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+%   fprintf('num_correct_go_response_1 = %.0f\n', length(inds))
+  for i = 1:length(inds)
+    j = inds(i);
+    event_info(j).correct_go_response = 1.0;
+  end
+
+  inds = cellfun(@(x,y,z)(~isempty(x) & ~isequal(x,y) & ~isempty(strfind(z,'Go'))),...
+                  {event_info.go_resp}, {event_info.go_cresp}, {event_info.type}, 'UniformOutput',0);
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+%   fprintf('num_correct_go_response_0 = %.0f\n', length(inds))
+  for i = 1:length(inds)
+    j = inds(i);
+    event_info(j).correct_go_response = 0.0;
+  end
+  
+  inds = cellfun(@(x,y,z,r)( isempty(x) & ~isequal(y,z) & ~isempty(strfind(r,'Go'))),...
+                  {event_info.go_resp}, {event_info.go_cresp}, {event_info.fix_resp}, {event_info.type},...
+                  'UniformOutput',0);
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+%   fprintf('num_correct_go_response_0 = %.0f\n', length(inds))
+  for i = 1:length(inds)
+    j = inds(i);
+    event_info(j).correct_go_response = 0.0;
+  end
+
+  inds = cellfun(@(x,y,z)( isempty(x) & isempty(y) & ~isempty(strfind(z,'Go'))),...
+                  {event_info.go_resp}, {event_info.fix_resp}, {event_info.type}, 'UniformOutput',0);
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+%   fprintf('num_correct_go_response_omission = %.0f\n', length(inds))
+  for i = 1:length(inds)
+    j = inds(i);
+    event_info(j).correct_go_response = 'omission';
+  end
+
+  % set_correct_stop
+  manynans = num2cell(NaN(1,length(event_info)));
+  [event_info.('correct_stop')] = manynans{:};
+
+  inds = cellfun(@(x,y,z,r)( isempty(x) & isempty(y) & isempty(z) & ~isempty(strfind(r,'Stop')) ),...
+            {event_info.stop_resp}, {event_info.fix_resp}, {event_info.ssd_resp}, {event_info.type}, 'UniformOutput',0);
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+  for i = 1:length(inds)
+    j = inds(i);
+    event_info(j).correct_stop = 1.0;
+  end
+
+  inds = cellfun(@(x,y,z,r)((~isempty(x) | ~isempty(y) | ~isempty(z)) & ~isempty(strfind(r,'Stop')) ),...
+            {event_info.stop_resp}, {event_info.fix_resp}, {event_info.ssd_resp}, {event_info.type}, 'UniformOutput',0);
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+  for i = 1:length(inds)
+    j = inds(i);
+    event_info(j).correct_stop = 0.0;
+  end
+
+  % set_correct_go_rt
+  inds = cellfun(@(x,y,z)(~isempty(x) & isempty(y) & ~isempty(strfind(z,'Go')) ),...
+                  {event_info.fix_resp}, {event_info.go_resp}, {event_info.type}, 'UniformOutput',0 );
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+
+  [event_info.('go_rt_adjusted')] = event_info.go_rt;
+  for i = 1:length(inds)
+    j = inds(i);
+    event_info(j).go_rt_adjusted = event_info(j).go_dur + event_info(j).fix_rt;
+  end
+
+  % set_correct_stop_rt
+  [event_info.('stop_rt_adjusted')] = event_info.stop_rt;
+
+  % set to Stop signal duration + fix rt, as was answered during fix
+  inds = cellfun(@(x,y,z,r)(~isempty(x) & isempty(y) & ~isempty(strfind(z,'Stop')) & isequal(r,0) ),...
+            {event_info.fix_resp}, {event_info.stop_resp}, {event_info.type}, {event_info.correct_stop}, 'UniformOutput',0);
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+  for i = 1:length(inds)
+    j = inds(i);
+    event_info(j).stop_rt_adjusted = event_info(j).stop_dur + event_info(j).fix_rt;
+  end
+
+  % adjust for answers during SSD
+  inds = cellfun(@(x)(~isempty(x)), {event_info.ssd_resp}, 'UniformOutput',0);
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+  for i = 1:length(inds)
+    j = inds(i);
+    event_info(j).stop_rt_adjusted = event_info(j).ssd_rt;
+  end
+
+  % set updated for response during stop
+  inds = cellfun(@(x,y,z)((~isempty(x) | ~isempty(y)) & ~isempty(z)),...
+            {event_info.stop_resp}, {event_info.fix_resp}, {event_info.stop_rt_adjusted}, 'UniformOutput',0);
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+  for i = 1:length(inds)
+    j = inds(i);
+    event_info(j).stop_rt_adjusted = event_info(j).stop_rt_adjusted + event_info(j).ssd_dur;
+  end
+
+  % check_omissions
+  inds = cellfun(@(x,y,z)( isempty(x) & isempty(y) & ~isempty(strfind(z,'Go')) ),...
+            {event_info.go_resp}, {event_info.fix_resp}, {event_info.type}, 'UniformOutput',0);
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+  n_missing = length(inds);
+
+  inds = cellfun(@(z)( ~isempty(strfind(z,'Go')) ), {event_info.type}, 'UniformOutput',0);
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+  n_go_trials = length(inds);
+
+  if n_missing == n_go_trials
+    disp('- All trials in this file are ommissions -')
+  end
+
+  %% todo: make below a subfunction?
+
+  % separate just go trials
+  inds = cellfun( @(x)( ~isempty(strfind(x,'Go')) ), {event_info.type}, 'UniformOutput',0 );
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+  go_trials = event_info(inds);
+
+  % set omissions to max go.rt - if primary rt is_null means omission
+  inds = cellfun( @(x)( strcmp(x,'omission') ), {go_trials.correct_go_response}, 'UniformOutput',0 );
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+  go_rt_max = max( [go_trials.go_rt] );
+  for i = 1:length(inds)
+    j = inds(i);
+    go_trials(j).go_rt_adjusted = go_rt_max;
+  end
+  % sort go trials
+  sorted_go = sort([go_trials.go_rt_adjusted]);
+
+  % get stop trials
+  inds = cellfun( @(x)(~isempty(strfind(x,'Stop'))), {event_info.type}, 'UniformOutput',0 );
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+  stop_trials = event_info(inds);
+
+  % calculate prob stop failure
+  prob_stop_failure = 1 - ...
+    sum( cellfun(@(x)(isequal(x,1)),{stop_trials.correct_stop})) / length( stop_trials );
+
+  % calc go.rt index
+  index = prob_stop_failure * length(sorted_go);
+
+  % if prob_stop_failure is 1, use the max go.rt
+  if ceil(index) == length(sorted_go)
+    index = length(sorted_go);
+  else
+    index = [floor(index) ceil(index)]+1;
+  end
+
+  % calc SSRT
+  mean_ssd = mean( [stop_trials.ssd_dur] );
+  try
+    ssrt = mean(sorted_go(index)) - mean_ssd;
+  catch
+      fprintf('index = %f\n', index);
+      fprintf('len sorted go = %f\n', length(sorted_go));
+      fprintf('prob stop fail = %f\n', prob_stop_failure);
+      ssrt = NaN;
+  end
+  tfmri_sst_all_beh_total_issrt = ssrt;
+  if parms.verbose, fprintf('%s: tfmri_sst_all_beh_total_issrt = %.4f\n',...
+      mfilename,tfmri_sst_all_beh_total_issrt); end
+
+  % number of glitched trials
+  inds = arrayfun(@(x,y)( (x < 50) & (x > 0) & (y <= 50)), [event_info.ssd_rt], [event_info.ssd_dur]);
+  tfmri_sst_beh_glitchcnt = sum(inds);
+  if parms.verbose, fprintf('%s: tfmri_sst_beh_glitchcnt = %.0f\n',...
+      mfilename,tfmri_sst_beh_glitchcnt); end
+  
+  tfmri_sst_beh_glitchflag = (tfmri_sst_beh_glitchcnt > 0);
+  if parms.verbose, fprintf('%s: tfmri_sst_beh_glitchflag = %.0f\n',...
+      mfilename,tfmri_sst_beh_glitchflag); end
+
+  %  def get_0SSD_cnt(subj)  and   get_0SSD_flag(subj):
+  inds = arrayfun(@(x)( x == 0 ), [event_info.ssd_dur]);
+  tfmri_sst_beh_0SSDcount = sum(inds);
+  if parms.verbose, fprintf('%s: tfmri_sst_beh_0SSDcount = %.0f\n',...
+      mfilename,tfmri_sst_beh_0SSDcount); end
+  
+  tfmri_sst_beh_0SSD_flag = (tfmri_sst_beh_0SSDcount > 20);  % Caled tfmri_sst_beh_0SSD>20flag in Sage's script
+  if parms.verbose, fprintf('%s: tfmri_sst_beh_0SSD_flag = %.0f\n',...
+      mfilename,tfmri_sst_beh_0SSD_flag); end
+
+  inds = cellfun(@(x,y)( (isequal(x,0) | isequal(x,1))  & ~isempty(strfind(y,'Go')) ),...
+            {event_info.correct_go_response}, {event_info.type}, 'UniformOutput',0);
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+  go_rt = mean( [event_info(inds).go_rt_adjusted] );
+
+  
+  inds = cellfun(@(x)( isequal(x,0) ), {event_info.correct_stop}, 'UniformOutput',0);
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+  stop_rt = mean( [event_info(inds).stop_rt_adjusted] );
+  
+  if parms.verbose
+    fprintf('%s:   go_rt = %.4f\n', mfilename,go_rt);
+    fprintf('%s: stop_rt = %.4f\n', mfilename,stop_rt);
+  end
+  
+  tfmri_sst_beh_violatorflag = (stop_rt > go_rt);
+  if parms.verbose, fprintf('%s: tfmri_sst_beh_violatorflag = %.0f\n',...
+      mfilename,tfmri_sst_beh_violatorflag); end
+
+  behav.SSRT_integrated_total = tfmri_sst_all_beh_total_issrt;
+  behav.violatorflag = tfmri_sst_beh_violatorflag;
+  behav.glitchflag = tfmri_sst_beh_glitchflag;
+  behav.zeroSSDcount  = tfmri_sst_beh_0SSDcount;
+
   % write to csv
   fname_csv_out = sprintf('%s/%s_behavioral.csv',parms.outdir,parms.outstem); 
   if ~exist(fname_csv_out,'file') || parms.forceflag
@@ -852,6 +1118,7 @@ function get_behavioral_data_empty(parms)
 
   behav = []; 
   behav.('SubjID') = []; behav.('VisitID') = []; 
+  behav.version = [];
   behav.switch_flag = 0; 
   behav.perform_flag = 0;
   behav.nruns = 0; 
