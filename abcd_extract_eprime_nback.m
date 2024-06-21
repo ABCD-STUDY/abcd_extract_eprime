@@ -1,5 +1,5 @@
-function [eprime_nruns,errcode,behav,errmsg] = abcd_extract_eprime_nback(fname,varargin)
-%function [eprime_nruns,errcode,behav,errmsg] = abcd_extract_eprime_nback(fname,[options])
+function [eprime_nruns,eprime_runs,errcode,behav,errmsg] = abcd_extract_eprime_nback(fname,varargin)
+%function [eprime_nruns,eprime_runs,errcode,behav,errmsg] = abcd_extract_eprime_nback(fname,[options])
 %
 % Purpose: extract condition time courses
 %   from eprime data files for NBACK task
@@ -47,9 +47,17 @@ function [eprime_nruns,errcode,behav,errmsg] = abcd_extract_eprime_nback(fname,v
 % Prev Mod: 05/13/20 by Octavio Ruiz
 % Prev Mod: 05/03/21 by Don Hagler
 % Prev Mod: 08/18/21 by Don Hagler
-% Last Mod: 02/10/22 by Octavio Ruiz
-% Last Mod: 04/22/22 by Don Hagler
-% Last Mod: 05/02/23 by Don Hagler
+% Prev Mod: 02/10/22 by Octavio Ruiz
+% Prev Mod: 04/22/22 by Don Hagler
+% Prev Mod: 05/02/23 by Don Hagler
+% Prev Mod: 05/01/24 by Don Hagler
+% Prev Mod: 05/07/24 by Don Hagler
+% Prev Mod: 05/14/24 by Don Hagler
+% Prev Mod: 05/17/24 by Don Hagler
+% Prev Mod: 05/24/24 by Don Hagler
+% Prev Mod: 06/06/24 by Don Hagler
+% Prev Mod: 06/13/24 by Don Hagler
+% Last Mod: 06/14/24 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -60,7 +68,7 @@ function [eprime_nruns,errcode,behav,errmsg] = abcd_extract_eprime_nback(fname,v
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % initialize outputs
-eprime_nruns = []; errcode = 0; behav = []; errmsg = [];
+eprime_nruns = []; eprime_runs = []; errcode = 0; behav = []; errmsg = [];
 
 % check arguments 
 if ~mmil_check_nargs(nargin,1), return; end;
@@ -75,6 +83,10 @@ mmil_mkdir(parms.outdir);
 [event_info,start_time,all_types,all_stims,all_targets,all_procs,errcode,errmsg] = get_event_info(parms);
 if errcode, return; end;
 
+% check for no responses 
+[nresp, errcode, errmsg] = check_no_responses(event_info,parms);
+if errcode, return; end;
+        
 % switch buttons if necesary 
 [event_info,parms.switch_flag,errcode,errmsg] = nback_switch(event_info,parms); 
 if errcode, return; end;
@@ -112,20 +124,25 @@ if parms.timing_files_flag && eprime_nruns
           ind_acc = find(acc==corr_flag);
           ind_inter = intersect(ind_inter,ind_acc);
         end;
+        % get response_times
+        resp_times = {event_info(ind_inter).stim_rt};
+        ind_noresp = find(cellfun(@isempty,{event_info(ind_inter).stim_resp}));
+        resp_times(ind_noresp) = {NaN};
         % get times of stim onset and offset
         onset = {event_info(ind_inter).stim_onset}; 
         offset = {event_info(ind_inter).stim_offset};
-        [onset,offset] = check_offsets(onset,offset,eventname,parms);
+        % check offsets match onsets
+        [onset,offset,resp_times] = check_offsets(onset,offset,resp_times,eventname,parms);
         % find most recent start time for each event
         [ind_start,event_ref_time] = set_ref(onset,start_time); 
         % create files for each scan
-        write_files(eventname,onset,offset,ind_start,event_ref_time,parms);
+        write_files(eventname,onset,offset,resp_times,ind_start,event_ref_time,parms);
       end;
-    end;   
+    end;
   end
 
   % create timing files for cue trials (pre-block instructions)
-  onset = []; offset = [];
+  onset = []; offset = []; resp_times = [];
   eventname = 'cue';
   for i=1:parms.ncues
     ind_cues = find(strcmp(parms.cues{i},all_procs));
@@ -133,18 +150,26 @@ if parms.timing_files_flag && eprime_nruns
     tmp_onset = {event_info_proc(ind_cues).cuefix_onset};
     % offset of stimulus block cue
     tmp_offset = {event_info_proc(ind_cues).([parms.cuenames{i} '_offset'])};
-    % check for empty onset/offset values
-    [tmp_onset,tmp_offset] = check_offsets(tmp_onset,tmp_offset,eventname,parms);
+    % set tmp_resp_times to all NaNs (because no response to cue)
+    tmp_resp_times = repmat({NaN},size(tmp_onset));
+    % check offsets match onsets
+    [tmp_onset,tmp_offset,tmp_resp_times] = check_offsets(tmp_onset,tmp_offset,tmp_resp_times,eventname,parms);
     % concatenate with other cue trials    
     onset = [onset tmp_onset];
     offset = [offset tmp_offset];
+    resp_times = [resp_times tmp_resp_times];
   end
+
   % sort onset and offset times
-  onset = sort(onset); offset = sort(offset);  
+  [onset,ind_sort] = sort(onset); 
+  offset = offset(ind_sort);
+  resp_times = resp_times(ind_sort);
+
   % find most recent start time for each event
   [ind_start,event_ref_time] = set_ref(onset,start_time);
+ 
   % create files for each scan
-  write_files(eventname,onset,offset,ind_start,event_ref_time,parms);
+  write_files(eventname,onset,offset,resp_times,ind_start,event_ref_time,parms);
 
 end %timing_files_flag
 
@@ -168,17 +193,28 @@ function parms = check_input(fname,options)
     'forceflag',false,[false true],...
     'timing_files_flag',true,[false true],...
     'verbose',true,[false true],...
+    ...
     'eprime_runs',1:2,[],...
     'eprime_nruns',0,0:2,...
+    'expected_numtrials',80,[],...
+    'expected_start_delay_GE',12,[],...
+    'expected_start_delay_Siemens',6.4,[],...
+    'expected_init_delay_GE_run1',0.5,[],...
+    'expected_init_delay_GE_run2',0,[],...
+    'expected_init_delay_Siemens',0,[],...
+    'start_delay_Siemens',6.4,[],...
+    'delay_diff_tol',1.0,[],...
     ...
     'colnames',  {'NARGUID','SessionDate','SessionTime','ExperimentName','ExperimentVersion',...
-                  'Procedure[Block]','BlockType','StimType','Stim.OnsetTime','Stim.OffsetTime','Stim.ACC',...
+                  'Procedure[Block]','BlockType','StimType',...
+                  'GetReady.RTTime','GetReady2.RTTime','Stim.OnsetTime','Stim.OffsetTime','Stim.ACC',...
                   'Cue2Back.OnsetTime','Cue2Back.OffsetTime','CueTarget.OnsetTime','CueTarget.OffsetTime',...
                   'CueFix.OnsetTime','CueFix.OffsetTime','CueFix.StartTime',...
                   'Fix15sec.OnsetTime', 'Fix15sec.OffsetTime','TargetType','Stim.RT',...
                   'CorrectResponse','Stim.RESP', 'Stimulus'},[],...
     'fieldnames',{'narguid','date','time','experiment','version',...
-                  'procedure_block','block_type','stim_type','stim_onset','stim_offset','stim_acc',...
+                  'procedure_block','block_type','stim_type',...
+                  'getready_rttime','getready2_rttime','stim_onset','stim_offset','stim_acc',...
                   'cue2back_onset','cue2back_offset','cue0back_onset','cue0back_offset',...
                   'cuefix_onset','cuefix_offset','cuefix_start',...
                   'fixation_onset', 'fixation_offset','target_type','stim_rt',...
@@ -191,6 +227,8 @@ function parms = check_input(fname,options)
     'cuenames',{'cue0back','cue2back'},[],...
     'procedures',{'TRSyncPROC', 'TRSyncPROCR2'},[]...
   });
+
+  %% todo: option to specify which type(s) of file to write?
   
   if parms.error_flag
     parms.corr_flags = [0,1];
@@ -240,22 +278,27 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [onset,offset] = check_offsets(onset,offset,eventname,parms)
+function [onset,offset,resp_times] = check_offsets(onset,offset,resp_times,eventname,parms)
   ind_empty = find(cellfun(@isempty,onset) | cellfun(@isempty,offset));
   if ~isempty(ind_empty)
-    if parms.verbose, fprintf('%s: WARNING: %s event has %d onsets and %d offsets\n',...
-      mfilename,eventname,nnz(~cellfun(@isempty,onset)),nnz(~cellfun(@isempty,offset))); end
+    if parms.verbose
+      fprintf('%s: WARNING: %s event has %d onsets and %d offsets\n',...
+        mfilename,eventname,nnz(~cellfun(@isempty,onset)),nnz(~cellfun(@isempty,offset)));
+      % NOTE: this may indicate file truncation
+    end
     ind_keep = setdiff([1:length(onset)],ind_empty);
     onset = onset(ind_keep);
     offset = offset(ind_keep);
+    resp_times = resp_times(ind_keep);
   end;
   onset = cell2mat(onset);
   offset = cell2mat(offset);
+  if iscell(resp_times), resp_times = cell2mat(resp_times); end
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function write_files(eventname,onset,offset,ind_start,event_ref_time,parms)
+function write_files(eventname,onset,offset,resp_times,ind_start,event_ref_time,parms)
   nscans = parms.eprime_nruns;
   scans = parms.eprime_runs;   
   
@@ -271,12 +314,18 @@ function write_files(eventname,onset,offset,ind_start,event_ref_time,parms)
       parms.outdir,parms.outstem,s,eventname);  
     fname_fsl = sprintf('%s/%s_scan%d_%s_fsl.txt',...
       parms.outdir,parms.outstem,s,eventname);
+    fname_rt = sprintf('%s/%s_scan%d_%s_rt.txt',...
+      parms.outdir,parms.outstem,s,eventname);
+
     if ~exist(fname_1D,'file') || ~exist(fname_txt,'file') || ...
-       ~exist(fname_block,'file') || ~exist(fname_fsl,'file') || parms.forceflag
+       ~exist(fname_block,'file') || ~exist(fname_fsl,'file') ||...
+       ~exist(fname_rt,'file') || parms.forceflag
       if ~isempty(onset(ind_scan))
         % subtract start time and convert to seconds
         rel_onset  = (onset(ind_scan) - event_ref_time(ind_scan))/1000;
         rel_offset = (offset(ind_scan) - event_ref_time(ind_scan))/1000;
+        % get resp_times for this scan
+        rel_resp_times = resp_times(ind_scan)/1000;
         % loop over events
         TR_mask = zeros(parms.numTRs,1);
         for k=1:length(rel_onset)
@@ -334,7 +383,14 @@ function write_files(eventname,onset,offset,ind_start,event_ref_time,parms)
         for i=1:length(rel_onset)
           fprintf(fid, '%0.2f %0.2f 1 \n',rel_onset(i), rel_offset(i)-rel_onset(i));
         end
-        fclose(fid); 
+        fclose(fid);
+        % write to rt file
+        fid = fopen(fname_rt,'wt');
+        if fid<0, error('failed to open %s for writing',fname_rt); end;
+        for i=1:length(rel_resp_times)
+          fprintf(fid, '%0.3f\n',rel_resp_times(i));
+        end
+        fclose(fid);
       else
         TR_mask = zeros(parms.numTRs,1);
         % write to 0s 1D file
@@ -362,6 +418,10 @@ function write_files(eventname,onset,offset,ind_start,event_ref_time,parms)
         fid = fopen(fname_fsl,'wt');
         if fid<0, error('failed to open %s for writing',fname_fsl); end;
         fclose(fid);    
+        % write empty rt file
+        fid = fopen(fname_rt,'wt');
+        if fid<0, error('failed to open %s for writing',fname_rt); end;
+        fclose(fid);    
       end
     end;
   end;
@@ -378,7 +438,7 @@ function [event_info,start_time,all_types,all_stims,all_targets,all_procs,errcod
   try
     % write event info to file
     fname_csv = abcd_check_eprime_sprdsh(parms.fname, parms.colnames,...
-                  parms.fieldnames, parms.outdir, parms.forceflag, parms.verbose);
+                  parms.fieldnames, parms.outdir, parms.outstem, parms.forceflag, parms.verbose);
     event_info = mmil_csv2struct(fname_csv);
   catch me
     if parms.verbose, fprintf('%s: ERROR: failed to read or interpret e-prime file %s:\n%s\n',...
@@ -398,28 +458,112 @@ function [event_info,start_time,all_types,all_stims,all_targets,all_procs,errcod
     return;
   else
     if parms.verbose, fprintf('%s: experiment name: %s\n',mfilename,experiment); end
-  end;
+  end
   
-  % get start times
+  % check for behavioral or GE-specific experiment
+  behav_flag = 0; ge_flag = 0;
+  if ~isempty(regexpi(experiment,'behavioral'))
+    behav_flag = 1;
+    expected_start_delay = [0,0];
+    expected_init_delay = [0,0];
+  elseif ~isempty(regexp(experiment,'_GE'))
+    ge_flag = 1;
+    expected_start_delay = parms.expected_start_delay_GE*[1,1];
+    expected_init_delay = [parms.expected_init_delay_GE_run1,parms.expected_init_delay_GE_run2];
+  else
+    expected_start_delay = parms.expected_start_delay_Siemens*[1,1];
+    expected_init_delay = parms.expected_init_delay_Siemens*[1,1];
+  end
+
+  % get trigger times
+  trig_time = [];
+  if isfield(event_info,'getready_rttime') || isfield(event_info,'getready2_rttime')
+    % get initial trigger times
+    trig_time = [];
+    if isfield(event_info,'getready_rttime')
+      ind_trig = find(~cellfun(@isempty,{event_info.getready_rttime}));
+      if ~isempty(ind_trig)
+        trig_time = event_info(ind_trig(1)).getready_rttime;
+      end
+    end
+    if isfield(event_info,'getready2_rttime')
+      ind_trig = find(~cellfun(@isempty,{event_info.getready2_rttime}));
+      if ~isempty(ind_trig)
+        trig_time = [trig_time,event_info(ind_trig(1)).getready2_rttime];
+      end
+    end
+    % exclude zeros
+    trig_time = nonzeros(trig_time)';
+  end
+  
+  % get start index
   all_procs = {event_info.procedure_block};
   ind_start=[];
+  start_proc=[];
   for i=1:parms.nprocedures
     proc = parms.procedures{i};
     ind_proc = find(strcmp(proc,all_procs));
-    if ~isempty(ind_proc)
-      if ind_proc(end)<length(event_info)
-        ind_start(i) = ind_proc(end) + 1;
-      end;
-    end;
-  end;
-  start_time = [event_info(ind_start).cuefix_start];  
-  
+    if ~isempty(ind_proc) && ind_proc(end)<length(event_info)
+      ind_start(i) = ind_proc(end);
+      start_proc{i} = proc;
+    end
+  end
+
+  % set start time based on trigger
+  start_time = [];
+  ind_proc = [];
+  for i=1:length(ind_start)
+    ind_proc(i) = find(strcmp(start_proc{i},parms.procedures));
+    if ind_proc(i)==1
+      start_time = [start_time,event_info(ind_start(i)).getready_rttime];
+    else
+      start_time = [start_time,event_info(ind_start(i)).getready2_rttime];
+    end
+  end
+  % exclude zeros
+  start_time = nonzeros(start_time)';
+
+  % reset expected delays if only one run
+  if length(ind_proc)==1
+    expected_start_delay = expected_start_delay(ind_proc);
+    expected_init_delay = expected_init_delay(ind_proc);
+  end
+
+  if ~behav_flag && ~ge_flag
+    % NOTE: for behavioral only, only one trigger is sent/recorded
+    %       set start_time to trigger
+    % NOTE: for Siemens/Philips, only one trigger is sent/recorded
+    %       set start_time relative to trigger with the standard start delay for Siemens/Philips
+    start_time = start_time + 1000*parms.start_delay_Siemens;
+  end
+
+  % get init_time
+  ind_init = ind_start + 1;
+  init_time = [event_info(ind_init).cuefix_onset];
+  % exclude zeros
+  init_time = nonzeros(init_time)';
+
+  % remove extra triggers
+  if length(trig_time) > length(init_time)
+    trig_time = trig_time(1:length(init_time));
+  end  
+  % remove extra starts
+  if length(start_time) > length(init_time)
+    start_time = start_time(1:length(init_time));
+  end
+
+  % check for disparity between trig_time and init_time
+  abcd_check_eprime_timing(trig_time,start_time,init_time,...
+    expected_start_delay,expected_init_delay,...
+    parms.outdir,parms.outstem,parms.delay_diff_tol,...
+    parms.verbose);
+
   % get block, stim, and target types for events
   event_info_events = remove_non_events(event_info);
   all_types = {event_info_events.block_type};
   all_stims = {event_info_events.stim_type};
   all_targets = {event_info_events.target_type};
-  
+
   % check stim_resp
   stim_resp = {event_info_events.stim_resp};
   correct_response = {event_info_events.correct_response};  
@@ -486,6 +630,26 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+% check for no responses
+function [nresp, errcode, errmsg] = check_no_responses(event_info,parms)
+  nresp = 0; errcode = 0; errmsg = [];
+  % remove non-events
+  event_info_events = remove_non_events(event_info);
+  % check stim_resp
+  stim_resp = {event_info_events.stim_resp};
+  % count number of responses
+  nresp = nnz(~cellfun(@isempty,stim_resp));
+  % if no responses, set errcode and errmsg
+  if nresp == 0
+    if parms.verbose, fprintf('%s: ERROR: no responses in %s\n',mfilename,parms.fname); end
+    errcode = 1;
+    errmsg = 'no responses';
+    return;
+  end
+return;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 function [event_info,switch_flag,errcode,errmsg] = nback_switch(event_info,parms)
 
   [switch_flag,acc1,errcode,errmsg] = nback_switch_flag(event_info,parms); 
@@ -518,27 +682,22 @@ function [switch_flag,accuracy,errcode,errmsg] = nback_switch_flag(event_info,pa
 
   % remove non-events
   event_info = remove_non_events(event_info);
-  
-  correct_resp = {event_info.stim_resp};
-  correct_total = size(cell2mat({event_info.correct_response}),2); 
-
-  resp = {event_info.correct_response}; 
+  % get responses
+  resp = {event_info.stim_resp}; 
+  % get correct responses
+  correct_resp = {event_info.correct_response};
+  correct_total = numel(correct_resp);
+  % count number of responses that match correct response
   correct = 0;
   for i=1:correct_total
     if correct_resp{i}==resp{i}
       correct = correct+1;
     end;
   end;
+  % calculate accuracy
   accuracy = 100*correct/correct_total; 
   if parms.verbose, fprintf('%s: accuracy = %0.1f%%\n',mfilename,accuracy); end
-
-  if accuracy == 0
-    %% todo: create flag to mark missing responses, do not set errcode
-    if parms.verbose, fprintf('%s: ERROR: accuracy equals zero for %s\n',mfilename,parms.fname); end
-    errcode = 1; 
-    errmsg = 'accuracy equals zero';
-    return; 
-  elseif accuracy < 100*parms.switch_thresh
+  if accuracy < 100*parms.switch_thresh
     if parms.verbose, fprintf('%s: accuracy < %0.1f%%, switching button responses\n',...
       mfilename,100*parms.switch_thresh); end
     switch_flag = 1;
@@ -569,7 +728,14 @@ return;
 function [event_info,event_info_proc] = remove_non_events(event_info)
   event_info_proc = event_info;
   all_types = {event_info.block_type};
-  ind_events = find(~cellfun(@isempty,all_types));
+  all_stims = {event_info.stim_type};
+  all_targets = {event_info.target_type};
+  % NOTE: if block_type is not empty, but stim_type or target_type is empty
+  %       that may reflect a truncated file due to premature file transfer
+  %       i.e., uploading file before it is fully written
+  ind_events = find(~cellfun(@isempty,all_types) &...
+                    ~cellfun(@isempty,all_stims) &...
+                    ~cellfun(@isempty,all_targets));
   event_info = event_info(ind_events);
 return;  
 
@@ -587,7 +753,7 @@ function [behav,runs_ok,errcode,errmsg] = get_behavioral_data_nback(event_info,p
   behav.switch_flag = parms.switch_flag;
   behav.perform_flag = 1;
 
-  % check if second runs is truncated 
+  % check if runs are truncated 
   onset_all = [event_info.stim_onset];
   [ind_start,~] = set_ref(onset_all,start_time);   
   nruns = length(unique(ind_start)); 
@@ -595,17 +761,20 @@ function [behav,runs_ok,errcode,errmsg] = get_behavioral_data_nback(event_info,p
   runs_ok = []; 
   for i=1:nruns
     run_len = length(find(runs==i));   
-    if run_len == 80 % hardcode the run length for now
+    if run_len == parms.expected_numtrials
       runs_ok = [runs_ok i];  
-    else 
-      if parms.verbose, fprintf('%s: WARNING: run %d is short: %d trials found (<80 trials) \n',mfilename,i,run_len); end
+    else
+      if parms.verbose
+        fprintf('%s: WARNING: run %d is short: %d trials found (expected %d)\n',...
+          mfilename,i,run_len,parms.expected_numtrials);
+      end
     end 
   end
   nruns = length(runs_ok);  
   if nruns == 1
-    new_info = find(runs==runs_ok);
-    event_info = event_info(new_info);
-    ind_start = ind_start(new_info); 
+    ind_ok = find(runs==runs_ok);
+    event_info = event_info(ind_ok);
+    ind_start = ind_start(ind_ok); 
   elseif nruns == 0
     if parms.verbose, fprintf('%s: ERROR: no valid e-prime runs in %s\n',mfilename,parms.fname); end
     errcode = 1;

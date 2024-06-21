@@ -25,12 +25,13 @@ tsk_fid_dict = {'MID':   ['MID'],
 encd_optns_list = ['utf-8','utf-16']
 
 # Acceptable extreme values
-rows_n_min      = 10
+rows_n_min      = 20   # before 22feb15, this value was 10
 rows_head_n_max =  5
 cols_n_min      = 10
 nruns_max       =  2   # Maximumn number of runs accepted within a file
+pGUIDmatch_ratio_min = 0.44
 
-head_vars = ['diagnos', 'dir_found', 'file_found', 'pGUIDmatch', 'contents_ok', 'exper', 'exper_ok', 'fname_exp_match', 'datime_ok', 'exp_t0', 'run', 'run_t0', 'tdiff', 'naming_ok', 'fname', 'msg']
+head_vars = ['diagnos', 'dir_found', 'file_found', 'pGUIDmatch', 'contents_ok', 'exper', 'behav_only', 'exper_ok', 'fname_exp_match', 'datime_ok', 'exp_t0', 'nruns', 'run', 'run_t0', 'tdiff', 'naming_ok', 'fname', 'msg']
 
 Verbose = False
 
@@ -38,12 +39,11 @@ Verbose = False
 # ---------------------------------------------------------------------------------------------------------------
 def program_description():
     print()
-
     print('Read E-Prime files saved as csv or tsv spreadsheets, detecting encoding and format.')
     print('Find runs in file, extract their starting time, and calculate their difference relative to a specified date & time.')
     print('Reads E-Prime files in a directory, and pick the file-run closest to a specified date & time.')
-    print('Spreadsheets with practice experiments are considered invalid.')
-    print('                        Octavio Ruiz.  2017jun-nov01, 2018feb-jun25, 2019apr-jul23, nov-2020feb14, 2020mar06-apr14')
+    print('Spreadsheets with practice experiments are considered invalid.                                        Octavio Ruiz.')
+    print('                   17jun-nov01, 18feb-jun25, 19apr-jul23,nov-2020feb14, 20mar06-apr14, 21jan08-apr27, 22jan19-jul19')
     print()
     print('Usage:')
     print('  ./eprime_sprdsht_get.py                           Print this help')
@@ -74,6 +74,10 @@ def program_description():
     print('  Info     Print an output line containing:')
     print('     ',  '  '.join(head_vars) )
     print()
+    print('Parameters:')
+    print('  To allow for typographical errors in EPrime file names, of up to about one letter, we will set pGUIDmatch = 1')
+    print('    if the similarity ratio between the subject and the Eprime file name is equal to or larger than:', pGUIDmatch_ratio_min )
+    print()
     print('Output:')
     print('  diagnos    Sum of values from the following code:')
     print('    = 0  File not found')
@@ -90,6 +94,7 @@ def program_description():
     print('         -64   =>   Experiment in spreadsheet does not match file name, or practice experiment (returned only if option = "FileNameCheck")')
     print('        -128   =>   Start_time_info not found or unable to extract')
     print('        -256   =>   Non specified error')
+    print("    when reporting more than one file, diagnos will reflect the largest number in the files' diagnostic codes (this is arbitrary, of course)")
     print()
     print('  dir_found        Directory found')
     print('  file_found       Found at least one file in directory')
@@ -108,7 +113,11 @@ def program_description():
     print('  fname            Full file fname')
     print()
     print('Use: "echo $?" to check exit status code')
-    print()
+    print("""
+Version notes:
+  This version (22jun16) searchs for a column-names row, by checking the pressence of 'ExperimentName' in the row.
+  This additional criteriumn should not affect previouos outcomes, because 'ExperimentName' was already expected and the file reported as invalid if the variable was not present
+      """)
     print('Examples:')
     print('  ./eprime_sprdsht_get.py   partic1  PickFile  "20170520 164900"  ""  ""  Info')
     print('  ./eprime_sprdsht_get.py   partic1  PickFile  "20170520 164900"  NDAR_INVJPLWZ1Z0  ""   Info')
@@ -226,12 +235,15 @@ def file_read( fname ):
     buf = None
     encoding  = None
     txt_lngth = None
-    num_lines = None
+    num_lines = 0
     sep_tab   = None
     itab      = None
     quoted_rows = None
     iquot       = None
     line_typic_seps_num = None
+    ok = False
+    msg = ''
+    diagnos = None
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     txt = ''
@@ -255,8 +267,16 @@ def file_read( fname ):
             # File reading failed => not the right encoding, try another one
             pass
 
-    if not encoding:
-        return buf, encoding, txt_lngth, num_lines, sep_tab, itab, quoted_rows, iquot, line_typic_seps_num
+    if (num_lines > rows_n_min):
+        if encoding:
+            pass
+        else:
+            diagnos = -256
+            return buf, encoding, txt_lngth, num_lines, sep_tab, itab, quoted_rows, iquot, line_typic_seps_num, ok, msg, diagnos
+    else:
+        msg = 'Error: file contains too few rows. '
+        diagnos = -32
+        return buf, encoding, txt_lngth, num_lines, sep_tab, itab, quoted_rows, iquot, line_typic_seps_num, ok, msg, diagnos
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -274,7 +294,7 @@ def file_read( fname ):
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     #            Are rows encased by quotation marks? - If so, remove quotes
     # check a "typical" line, after min. number of initial rows
-    i_typ = int( (rows_n_min + num_lines) / 2 )
+    i_typ = int(np.floor( 0.5*(rows_n_min+num_lines)))
     line = txt_lines[i_typ]
     if line.startswith('"') and line.endswith('"'):
         quoted_rows = True
@@ -302,7 +322,10 @@ def file_read( fname ):
     # print( pd.Series( [txt_lines[i].count( sep )  for i in range(i_typ-2, i_typ+3)] ) )
     # print( pd.Series( [txt_lines[i].count( sep )  for i in range(i_typ-2, i_typ+3)] ).min() )
     # print()
-    line_typic_seps_num  = pd.Series( [txt_lines[i].count( sep )  for i in range(i_typ-2, i_typ+3)] ).min()
+    # line_typic_seps_num  = pd.Series( [txt_lines[i].count( sep )  for i in range(i_typ-2, i_typ+3)] ).min()
+    i1 = max([ i_typ-2, rows_n_min ])
+    i2 = min([ i_typ+3, num_lines ])
+    line_typic_seps_num  = pd.Series( [txt_lines[i].count( sep )  for i in range(i1,i2)] ).min()
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     # Store "de-quoted" text as a readable memory object, that can be read into a pd.DataFrame
@@ -310,8 +333,9 @@ def file_read( fname ):
     buf.flush()
     buf.seek(0)
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    ok = True
 
-    return buf, encoding, txt_lngth, num_lines, sep_tab, itab, quoted_rows, iquot, line_typic_seps_num
+    return buf, encoding, txt_lngth, num_lines, sep_tab, itab, quoted_rows, iquot, line_typic_seps_num, ok, msg, diagnos
 # ---------------------------------------------------------------------------------------------------------------
 
 
@@ -326,6 +350,7 @@ def sprdsht_read( sprdsh, sep_tab, num_lines, line_typic_seps_num ):
     msg = ''
 
     for hoffs in range(0, rows_head_n_max):
+        # print('hoffs =', hoffs )
         data = pd.DataFrame()
         sprdsh.seek(0)
         try:
@@ -336,10 +361,13 @@ def sprdsht_read( sprdsh, sep_tab, num_lines, line_typic_seps_num ):
         except:
             pass
 
+        # Octavio changed these criteria on 22jun16. It should work for all files because, if ExperimentName
+        #   is not present in the column names, the script reports the file as invalid (see below) 
         if (len(data.columns) > cols_n_min) and (len(data.columns) >= (0.9 * line_typic_seps_num)):
-            # If row contains column names, there must be none or very few empty (unnamed) cells
-            if ['Unnamed' in s for s in data.columns].count(True) < 5:
-                break
+            if 'ExperimentName' in data.columns:  # this should be valid column names row
+                # If row contains column names, there must be none or very few empty (unnamed) cells
+                if ['Unnamed' in s for s in data.columns].count(True) < 5:
+                    break
 
     # Many times, when an EPrime file is uploaded at the site, its encoding is Microsoft, not Unix
     # When I read those files, there are blank lines between each spreadsheet line.
@@ -360,6 +388,10 @@ def sprdsht_read( sprdsh, sep_tab, num_lines, line_typic_seps_num ):
 
     return data, hoffs, ok, msg
 # ---------------------------------------------------------------------------------------------------------------
+        # if (len(data.columns) > cols_n_min) and (len(data.columns) >= (0.9 * line_typic_seps_num)):
+        #     # If row contains column names, there must be none or very few empty (unnamed) cells
+        #     if ['Unnamed' in s for s in data.columns].count(True) < 5:
+        #         break
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -410,13 +442,21 @@ def ExperimentCheck( data, fname ):
                                 exper = 'nBack_WM'
                         break
 
+                if exper == 'Unknown':   # If still unknown at this point, the experiment could be nBack, either WM or REC; try to find out
+                    if 'DataFile.Basename' in data.columns and 'StimuliDir' in data.columns:
+                        if 'nback_rec' in data['DataFile.Basename'].iloc[0].lower() and 'REC' in data['StimuliDir'].iloc[0]:
+                            exper = 'nBack_Rec'
+                        else:
+                            if 'WM' in data['StimuliDir'].iloc[0] and ('Wait4Scanner' in data.columns or 'Waiting4Scanner' in data.columns):
+                                exper = 'nBack_WM'
+
                 if Verbose:
                     print('exp_fnameID_list =', exp_fnameID_list )
 
                 if len(fname):
                     # Check if experiment matches file name identifier
-                    for exp_fn in exp_fnameID_list:
-                        if fname.lower().rfind(exp_fn.lower()) > (len(fname)-13):   # (look for task id near the end of file name)
+                    for experiment in exp_fnameID_list:
+                        if f"_{experiment}_".lower() in os.path.basename(fname).lower():
                             fname_exp_match = 1
                             break
                 else:
@@ -432,11 +472,13 @@ def ExperimentCheck( data, fname ):
             ok = False
             msg = 'Invalid experiment information in spreadsheet. '
             exp_diagnos = -32
-
     else:
         ok = False
         msg = 'Unable to recognize experiment in spreadsheet. '
         exp_diagnos = -32
+
+    if Verbose:
+        print('exp_check_ok =', ok, ',  exp_check_msg:', msg, '\n')
     
     return exp_in_file, exper, fname_exp_match, ok, msg, exp_diagnos
 # ---------------------------------------------------------------------------------------------------------------
@@ -541,6 +583,13 @@ def extract_nruns_delays_and_times( data, exper, exp_datime ):
                         msg += 'Experiment terminated before last run completed. '
                         if Verbose:
                             print( msg, '\n')
+                # else:
+                #     msg = 'Unable to assess a starting time for this run. '
+                #     nruns = 0
+                #     if Verbose:
+                #         print( msg )
+                #         print('nruns =', nruns )
+                #     return nruns, exp_delays, exp_t0s, ok, msg
         else:
             msg = 'Unable to find column with starting times per run. '
             return nruns, exp_delays, exp_t0s, ok, msg
@@ -561,7 +610,7 @@ def extract_nruns_delays_and_times( data, exper, exp_datime ):
         except Exception as err:
             msg = 'Unable to assess starting time: %s. ' % str(err) 
     else:
-        msg = 'Unable to find starting times per run. '
+        msg = 'Unable to find a starting times for run. '
 
     return nruns, exp_delays, exp_t0s, ok, msg
 # ---------------------------------------------------------------------------------------------------------------
@@ -580,7 +629,7 @@ Info_Prot = {
     'file_found': 0,
     'pGUIDmatch': 0.0,
     'naming_ok':  0,
-    'fname':      None,
+    'fname':      '',
 
     'encoding':    None,
     'sep_tab':     None,
@@ -590,8 +639,9 @@ Info_Prot = {
     'n_cols':      None,
 
     'contents_ok': 0,
-    'exp_in_file': None,
-    'exper':       None,
+    'exp_in_file': '',
+    'exper':       '',
+    'behav_only': float('nan'),
     'exper_ok':    0,
     'fname_exp_match': 0,
     'diagnos':       -256,
@@ -625,10 +675,12 @@ def EPrime_Info_and_Data_get( fname ):
     # if f_nopath_name.startswith('NDAR_INV') and f_nopath_name.count('_') == 2:
     #     Info['naming_ok'] = 1
 
-    # Does file name complies with ABCD format: official pGUID format + _taskname ?
+    Info['modified_time'] = datetime.datetime.fromtimestamp(os.path.getmtime(fname))
+
+    # Does file name complies with ABCD format: official pGUID format + _taskname or _taskname_year ?
     Info['naming_ok'] = 0
     f_nopath_name = os.path.basename( fname )
-    if f_nopath_name.startswith('NDAR_INV') and f_nopath_name.count('_') == 2:
+    if f_nopath_name.startswith('NDAR_INV') and f_nopath_name.count('_') in [2,3]:
         pGUID_short = f_nopath_name.replace('NDAR_INV','')
         if len(pGUID_short.split('_')[0]) == 8:
             Info['naming_ok'] = 1
@@ -636,27 +688,41 @@ def EPrime_Info_and_Data_get( fname ):
     # ---------------------------------------------------------------------------------------------------------------
     #                                 Read file and determine encoding and format
 
-    sprdsh, encoding, txt_lngth, lines_num, sep_tab, itab, quoted_rows, iquot, line_typic_seps_num  =  file_read( fname )
+    sprdsh, encoding, txt_lngth, lines_num, sep_tab, itab, quoted_rows, iquot, line_typic_seps_num, file_ok, file_msg, file_diagnos  =  file_read( fname )
     
     Info['fname']       = fname
     Info['encoding']    = encoding
     Info['sep_tab']     = sep_tab
     Info['quoted_rows'] = quoted_rows
+    Info['msg']         = file_msg
 
     if Verbose:
-        print('encoding =', encoding, ',   txt_lngth =', txt_lngth, ',   lines_num =', lines_num,
+        print('encoding =', encoding, ',   txt_lngth =', txt_lngth, ',   lines_num =', lines_num, ',   file_ok =', file_ok, ',   file_msg:', file_msg, ',   file_diagnos:', file_diagnos,
            ',   sep_tab =', sep_tab, ',   quoted_rows =', quoted_rows, ',   line_typic_seps_num =', line_typic_seps_num )
 
     if encoding:
         Info['dir_found'] = 1
         Info['file_found'] = 1
         Info['fname'] = fname
+        if file_ok:
+            pass  # and continue processing and checking below
+        else:
+            if file_diagnos:
+                Info['diagnos'] = file_diagnos
+            else:
+                Info['diagnos'] = -256
+                Info['msg'] = 'Error: unable to read file'
     else:
+        if file_diagnos:
+            Info['diagnos'] = file_diagnos
+        else:
+            Info['diagnos'] = -256
+            Info['msg'] = 'Error: unable to read file'
+
+    if not (file_ok and encoding):
         Info['ok']  = False
-        Info['msg'] = 'Error: unable to read file'
-        Info['diagnos'] = 0
         if Verbose:
-            print( Info['msg'], '\n')
+            print("Info['diagnos', 'msg'] : ", Info['diagnos'], ',', Info['msg'], '\n')
         return Info, data
     # ---------------------------------------------------------------------------------------------------------------
 
@@ -724,21 +790,25 @@ def EPrime_Info_and_Data_get( fname ):
             Info['diagnos'] = exp_diagnos + Info['diagnos']
         else:
             Info['diagnos'] = exp_diagnos - Info['diagnos']
-        return Info, data
+        # return Info, data
 
     if Verbose:
         print('Task reported in file:', exper, '. ', msg)
         print()
+
+    if not Info['ok']:
+        return Info, data
     # ---------------------------------------------------------------------------------------------------------------
 
 
     # ---------------------------------------------------------------------------------------------------------------
-    #       Extract experiment time information and starting time of each run in file
-
-    exp_date_str = data.iloc[0]['SessionDate']
-    exp_time_str = data.iloc[0]['SessionTime']
+    #                    Extract experiment time information and starting time of each run in file
+    exp_date_str = ''
+    exp_time_str = ''
     delay = float('nan')
     try:
+        exp_date_str = data.iloc[0]['SessionDate']
+        exp_time_str = data.iloc[0]['SessionTime']
         exp_datime = dateutil.parser.parse( exp_date_str + ' ' + exp_time_str )
     except:
         exp_diagnos += -128
@@ -749,22 +819,27 @@ def EPrime_Info_and_Data_get( fname ):
         Info['exp_datime'] = exp_datime
 
         if  Info['exper'] == 'nBack_Rec':
-            # File contains an nBack recall experiment, performed outside the scanner,
+            # File contains an nBack-recall experiment, performed outside the scanner,
             # therefore there is no waiting for a sync.pulse from the scanner to begin the experiment
             Info['delay']  = float('nan')
             Info['exp_t0'] = Info['exp_datime']
             Info['datime_ok'] = 1
+            Info['nruns']     = 1  # Set arbitrarily here because I do not know how to extract this value from an nBack-recall file
             ok = True
+
         else:
             Info, ok, msg, exp_diagnos  =  extract_ini_time( data, Info, exp_diagnos )
-
             if Info['datime_ok']:
-
                 nruns, exp_delays, exp_t0s, ok, msg  =  extract_nruns_delays_and_times( data, Info['exper'], exp_datime )
-
                 Info['nruns']     = nruns
                 Info['exp_times'] = exp_t0s
-                # Info['run']    = exp_t0s
+
+                if Info['nruns'] < 1:
+                    Info['datime_ok'] = 0
+                    Info['msg'] += 'File contains too few runs. '
+                if Info['nruns'] > nruns_max:
+                    Info['datime_ok'] = 0
+                    Info['msg'] += 'File contains too many runs. '
 
         Info['ok']  = ok
         Info['msg'] = Info['msg'] + msg
@@ -836,95 +911,117 @@ def ExportFile( data, fname_out ):
 
 
 # ---------------------------------------------------------------------------------------------------------------
-def List_and_Pick_Files( fname, optn, fname_out, subj, ref_time_arg, task_arg, optn2, header_show, quiet=False ):
+def List_and_Pick_Files( file_dir, optn, fname_out, subj, ref_time_arg, task_arg, optn2, header_show, quiet=False, subj_strict=True ):
 
     Files = pd.DataFrame()
     EPrime_Info = copy.deepcopy( Info_Prot )
     EPrime_Data = pd.DataFrame()
 
-    f_path = fname
-    path_to_search = f_path + '/*'
+    path_to_search = file_dir + '/*'
     f_list = glob.glob( path_to_search )
 
     # Extract "kernel" of subject ID for comparison with file name
-    subj = subj.replace('NDAR_INV','').replace('INV','')
+    subj = str(subj).replace('NDAR_INV','').replace('INV','')
     if Verbose:
-        print('subj=', subj)
+        print('subj = ', subj)
+        print('f_list:', f_list )
 
     if not f_list:
-        EPrime_Info['fname'] = fname
+        EPrime_Info['fname'] = file_dir
         EPrime_Info['ok'] = False
         EPrime_Info['msg'] = 'Error: argument is not a directory. '
         # if Verbose or not optn2:
         if Verbose:
-            print('f_list:', f_list )
             print( EPrime_Info['msg'] )
 
         # return ok, msg, Files, EPrime_Info, EPrime_Data
         return Files, EPrime_Info, EPrime_Data
 
 
-    for j, fname_full in enumerate( f_list ):
+    # 21mar20,apr27: There are some files which names that include blanks and that show with those blanks or with ??? in python strings or Pandas
+    # I need to remove these files to prevent problems with the new matcher. I tried tricks and pathvalidate; 
+    # what worked is checking for the pressence of non-ascii unicode characters
 
+    for j, fname_full in enumerate( f_list ):
         path  = os.path.dirname( fname_full)
         fname = os.path.basename(fname_full)
-
+        if len(fname.encode('ascii', 'ignore')) == len(fname.encode('ascii', 'replace')):
+            fname_ok = True
+        else:
+            fname_ok = False
         if Verbose:
-            print('Reading:', fname_full )
+            print(' ',  fname.encode('ascii', 'ignore'), ',  ',  fname.encode('ascii', 'replace'), ': ',  len(fname.encode('ascii', 'ignore')), ',  ',  len(fname.encode('ascii', 'replace')), ',  fname_ok =', fname_ok )
 
-        EPrime_Info, EPrime_Data  =  EPrime_Info_and_Data_get( fname_full )
+        if fname_ok:
+            if Verbose:
+                print('Reading:', fname_full )
 
-        if EPrime_Info['fname']:
+            EPrime_Info, EPrime_Data  =  EPrime_Info_and_Data_get( fname_full )
 
-            # If a subject ID was provided: search for a perfect-match substring in the file name then evaluate general string similarity
-            pGUIDmatch = 0.0
-            if len(subj)>7:
-                subloc = fname.find(subj)
-                if subloc >= 0:
-                    pGUIDmatch = 10.0
-            if len(subj)>3:
-                pGUIDmatch += round( SequenceMatcher( a=subj, b=fname ).ratio(), 2 )
+            if EPrime_Info['fname']:
+                # If a subject ID was provided: search for a perfect-match substring in the file name then evaluate general string similarity
+                pGUIDmatch = 0.0
+                if len(subj)>7:
+                    subloc = fname.find(subj)
+                    if subloc >= 0:
+                        pGUIDmatch = 1.0
+                if len(subj)>3:
+                    subj_fname_part = "_".join(fname.split("_")[:2])
+                    pGUIDmatch += round( SequenceMatcher( a=subj.lower(), b=subj_fname_part.lower() ).ratio(), 2 )
+                if len(EPrime_Data) > 0 and 'NARGUID' in EPrime_Data.columns:
+                    # Check if the NARGUID in the E-Prime file is a close match to the subject ID
+                    eprime_narguid = str(EPrime_Data['NARGUID'].unique()[0])
+                    if round( SequenceMatcher( a=subj.lower(), b=eprime_narguid.lower() ).ratio(), 2 ) > 0.5:
+                        pGUIDmatch += 1.0
+                    else:
+                        pGUIDmatch -= 1.0
 
-            if EPrime_Info['exper'] == 'nBack_Rec' and  EPrime_Info['datime_ok']  and  EPrime_Info['nruns'] == 0:
-                if Verbose:
-                    print('Experiment is a nBack - recall')
+                # if EPrime_Info['exper'] in ['MID','SST'] and EPrime_Info['datime_ok']:
+                #     if Verbose:
+                #         print('Experiment is a MID or SST task:', EPrime_Info['exper'])
+                if EPrime_Info['exper'] in ['MID','SST','nBack_WM'] and EPrime_Info['datime_ok']:
+                    if Verbose:
+                        print('Experiment is a MID, SST, or nBack_WM task:', EPrime_Info['exper'])
 
-                record = pd.DataFrame( dict({'file': fname,
-                                            'encoding':    EPrime_Info['encoding'],
-                                            'sep_tab':     EPrime_Info['sep_tab'],
-                                            'quoted_rows': EPrime_Info['quoted_rows'],
-                                            'hoffs':       EPrime_Info['hoffs'],
-                                            'n_rows':      EPrime_Info['n_rows'],
-                                            'n_cols':      EPrime_Info['n_cols'],
-                                            'contents_ok': EPrime_Info['contents_ok'],
-                                            'exp_in_file': EPrime_Info['exp_in_file'],
-                                            'exper':       EPrime_Info['exper'],
-                                            'fname_exp_match': EPrime_Info['fname_exp_match'],
-                                            'exp_datime':  EPrime_Info['exp_datime'],
-                                            'delay':       EPrime_Info['delay'],
-                                            'exp_t0':      EPrime_Info['exp_t0'],
-                                            'nruns':       EPrime_Info['nruns'],
-                                            'run':         0,
-                                            'run_t0':      EPrime_Info['exp_t0'],
-                                            'ok':          EPrime_Info['ok'],
-                                            'naming_ok':   EPrime_Info['naming_ok'],
-                                            'pGUIDmatch':  pGUIDmatch,
-                                            'diagnos':     EPrime_Info['diagnos'],
-                                            'msg':         EPrime_Info['msg'],
-                                            'path': path }),  index=[j] )
-                Files = Files.append( record, ignore_index=True )
+                    for ri in range( 0, EPrime_Info['nruns'] ):
+                        record = pd.DataFrame( dict({'file': fname,
+                                                    'modified_time':    EPrime_Info['modified_time'],
+                                                    'encoding':    EPrime_Info['encoding'],
+                                                    'sep_tab':     EPrime_Info['sep_tab'],
+                                                    'quoted_rows': EPrime_Info['quoted_rows'],
+                                                    'hoffs':       EPrime_Info['hoffs'],
+                                                    'n_rows':      EPrime_Info['n_rows'],
+                                                    'n_cols':      EPrime_Info['n_cols'],
+                                                    'contents_ok': EPrime_Info['contents_ok'],
+                                                    'exp_in_file': EPrime_Info['exp_in_file'],
+                                                    'exper':       EPrime_Info['exper'],
+                                                    'fname_exp_match': EPrime_Info['fname_exp_match'],
+                                                    'exp_datime':  EPrime_Info['exp_datime'],
+                                                    'delay':       EPrime_Info['delay'],
+                                                    'exp_t0':      EPrime_Info['exp_t0'],
+                                                    'nruns':       EPrime_Info['nruns'],
+                                                    'run':         ri + 1,
+                                                    'run_t0':      EPrime_Info['exp_times'][ri],
+                                                    'ok':          EPrime_Info['ok'],
+                                                    'naming_ok':   EPrime_Info['naming_ok'],
+                                                    'pGUIDmatch':  pGUIDmatch,
+                                                    'diagnos':     EPrime_Info['diagnos'],
+                                                    'msg':         EPrime_Info['msg'],
+                                                    'path': path }),  index=[j] )
+                        Files = pd.concat([Files, record])
 
-            else:
-                nruns = min( [EPrime_Info['nruns'], nruns_max] )
-                for ri in range( 0, nruns ):
+
+                elif EPrime_Info['exper'] == 'nBack_Rec' and EPrime_Info['datime_ok']:
+                    if Verbose:
+                        print('Experiment is nBack-recall', EPrime_Info['exper'])
                     record = pd.DataFrame( dict({'file': fname,
+                                                'modified_time':    EPrime_Info['modified_time'],
                                                 'encoding':    EPrime_Info['encoding'],
                                                 'sep_tab':     EPrime_Info['sep_tab'],
                                                 'quoted_rows': EPrime_Info['quoted_rows'],
                                                 'hoffs':       EPrime_Info['hoffs'],
                                                 'n_rows':      EPrime_Info['n_rows'],
                                                 'n_cols':      EPrime_Info['n_cols'],
-
                                                 'contents_ok': EPrime_Info['contents_ok'],
                                                 'exp_in_file': EPrime_Info['exp_in_file'],
                                                 'exper':       EPrime_Info['exper'],
@@ -932,24 +1029,48 @@ def List_and_Pick_Files( fname, optn, fname_out, subj, ref_time_arg, task_arg, o
                                                 'exp_datime':  EPrime_Info['exp_datime'],
                                                 'delay':       EPrime_Info['delay'],
                                                 'exp_t0':      EPrime_Info['exp_t0'],
-
                                                 'nruns':       EPrime_Info['nruns'],
-                                                'run':         ri + 1,
-                                                'run_t0':      EPrime_Info['exp_times'][ri],
-                                                # 'run_t0':      EPrime_Info['run'][ri],
-                                                # 'run_t0':      EPrime_Info['run'][ri]['run_t0'],
-
+                                                'run':         1,
+                                                'run_t0':      EPrime_Info['exp_t0'],
                                                 'ok':          EPrime_Info['ok'],
                                                 'naming_ok':   EPrime_Info['naming_ok'],
                                                 'pGUIDmatch':  pGUIDmatch,
                                                 'diagnos':     EPrime_Info['diagnos'],
-
                                                 'msg':         EPrime_Info['msg'],
                                                 'path': path }),  index=[j] )
+                    Files = pd.concat([Files, record])
 
-                    Files = Files.append( record, ignore_index=True )
-        else:
-            pass
+                else:
+                    if Verbose:
+                        print('File does not contain an accepted task:', EPrime_Info['exper'] )   # e.g. Practice
+                    record = pd.DataFrame( dict({'file': fname,
+                                                'modified_time':    EPrime_Info['modified_time'],
+                                                'encoding':    EPrime_Info['encoding'],
+                                                'sep_tab':     EPrime_Info['sep_tab'],
+                                                'quoted_rows': EPrime_Info['quoted_rows'],
+                                                'hoffs':       EPrime_Info['hoffs'],
+                                                'n_rows':      EPrime_Info['n_rows'],
+                                                'n_cols':      EPrime_Info['n_cols'],
+                                                'contents_ok': EPrime_Info['contents_ok'],
+                                                'exp_in_file': EPrime_Info['exp_in_file'],
+                                                'exper':       EPrime_Info['exper'],
+                                                'fname_exp_match': EPrime_Info['fname_exp_match'],
+                                                'exp_datime':  EPrime_Info['exp_datime'],
+                                                'delay':       EPrime_Info['delay'],
+                                                'exp_t0':      EPrime_Info['exp_t0'],
+                                                'nruns':       EPrime_Info['nruns'],
+                                                'run':         0,
+                                                'run_t0':      EPrime_Info['exp_t0'],
+                                                'ok':          EPrime_Info['ok'],
+                                                'naming_ok':   EPrime_Info['naming_ok'],
+                                                'pGUIDmatch':  pGUIDmatch,
+                                                'diagnos':     EPrime_Info['diagnos'],
+                                                'msg':         EPrime_Info['msg'],
+                                                'path': path }),  index=[j] )
+                    Files = pd.concat([Files, record])
+
+            else:
+                pass
 
     EPrime_Info =  copy.deepcopy( Info_Prot )
     EPrime_Info['dir_found'] = 1
@@ -957,10 +1078,8 @@ def List_and_Pick_Files( fname, optn, fname_out, subj, ref_time_arg, task_arg, o
     EPrime_Data = pd.DataFrame()
 
     if len(Files) <= 0:
-        # EPrime_Info['fname'] = fname
         EPrime_Info['ok'] = False
         EPrime_Info['msg'] = 'Unable to read or interpret files in directory. '
-        # if Verbose or not optn2:
         if Verbose:
             print( EPrime_Info['msg'] )
 
@@ -969,25 +1088,50 @@ def List_and_Pick_Files( fname, optn, fname_out, subj, ref_time_arg, task_arg, o
     else:
         EPrime_Info['file_found'] = 1
 
+    # Detect if the file was collected outside the scanner; this is important because in this case there will be no corresponding series to match to
+    try:
+        Files['behav_only'] = [1 if ('ehavior' in s) else 0 for s in Files['exp_in_file']]
+    except:
+        Files['behav_only'] = 0
+
     # Reorder columns
     Files = Files[['file', 'encoding', 'sep_tab', 'quoted_rows', 'hoffs', 'n_rows', 'n_cols',
-                   'ok', 'contents_ok', 'exp_in_file', 'exper', 'fname_exp_match', 'exp_datime', 'delay', 'exp_t0',
-                   'nruns', 'run', 'run_t0',
-                   'naming_ok', 'pGUIDmatch', 'diagnos', 'msg', 'path']]
+                   'ok', 'contents_ok', 'exp_in_file', 'exper', 'behav_only', 'fname_exp_match', 'exp_datime', 'delay', 'exp_t0',
+                   'nruns', 'run', 'run_t0', 'naming_ok', 'pGUIDmatch', 'diagnos', 'msg', 'path', 'modified_time']]
 
     # Sort by ok, date & time, interpreted or not, prefered format
-    Files = Files.sort_values( by=['ok','pGUIDmatch','exp_datime', 'exper', 'diagnos', 'naming_ok', 'fname_exp_match'],
-                               ascending=[False, False, True, True, True, False, False] )
-
+    if subj_strict:
+        Files = Files.sort_values( by=[ 'ok',  'n_rows',  'pGUIDmatch',  'exp_datime','exper','diagnos','naming_ok','fname_exp_match'],
+                            ascending=[False,    False,      False,          True,     True,    True,      False,         False])
+    else:
+        Files = Files.sort_values( by=[ 'ok',  'n_rows',                 'exp_datime','exper','diagnos',            'fname_exp_match'],
+                            ascending=[False,    False,                      True,     True,    True,                     False])
     Files = Files.reset_index( drop=True )
+
+    # # Sort by ok, date & time, interpreted or not, prefered format
+    # Files = Files.sort_values( by=['ok','pGUIDmatch','exp_datime', 'exper', 'diagnos', 'naming_ok', 'fname_exp_match'],
+    #                            ascending=[False, False, True, True, True, False, False] )
+
+    # Files = Files.reset_index( drop=True )
 
     # Keep values of pguid-match and naming_ok of best file's name found at this point, in case dir contains no valid files
     pGUIDmatch = Files.iloc[0]['pGUIDmatch']
-    naming_ok   = Files.iloc[0]['naming_ok']
+    naming_ok  = Files.iloc[0]['naming_ok']
 
     if (Verbose or optn == 'ListFiles') and not quiet:
-        print('Found files:')
-        print( Files )
+        print('Files we found:')
+        print( Files, '\n')
+
+    EPrime_Info['pGUIDmatch'] = pGUIDmatch
+    EPrime_Info['naming_ok']  = naming_ok
+
+    for ri, row in Files.iterrows():
+        # when reporting more than one file, diagnos will reflect the largest number in the files' diagnostic codes (this is arbitrary, of course)
+        if EPrime_Info['diagnos'] <= 0 and row['diagnos'] > EPrime_Info['diagnos']:
+            EPrime_Info['diagnos'] = row['diagnos']
+        if row['msg'] not in EPrime_Info['msg']:
+            EPrime_Info['msg'] += row['msg']
+
 
     if optn == 'PickFile':
         # Filter file list: valid files and, if specified, task.
@@ -999,10 +1143,9 @@ def List_and_Pick_Files( fname, optn, fname_out, subj, ref_time_arg, task_arg, o
 
         if len(Files) <= 0:
             EPrime_Info['ok'] = False
-            EPrime_Info['msg'] = 'No valid files in directory. '
+            EPrime_Info['msg'] += 'No valid files in directory. '
             EPrime_Info['pGUIDmatch'] = pGUIDmatch
             EPrime_Info['naming_ok']  = naming_ok
-            # print_EPrime_info( EPrime_Info, header_show )
             return Files, EPrime_Info, EPrime_Data
 
 
@@ -1017,7 +1160,6 @@ def List_and_Pick_Files( fname, optn, fname_out, subj, ref_time_arg, task_arg, o
             EPrime_Info['msg'] = 'No files in directory satisfy request. '
             EPrime_Info['pGUIDmatch'] = pGUIDmatch
             EPrime_Info['naming_ok']  = naming_ok
-            # print_EPrime_info( EPrime_Info, header_show )
             return Files, EPrime_Info, EPrime_Data
 
 
@@ -1031,12 +1173,21 @@ def List_and_Pick_Files( fname, optn, fname_out, subj, ref_time_arg, task_arg, o
             Files['tdiff']  = [ round( (s-ref_time).total_seconds()/60, 2 )  for s in Files['run_t0']]
             Files['tdiffa'] = [ abs(s) for s in Files['tdiff'] ]
 
-            Files = Files.sort_values( by=['tdiffa', 'pGUIDmatch', 'exp_t0', 'exper', 'diagnos', 'naming_ok', 'fname_exp_match'],
-                                       ascending=[True, False, True, True, True, False, False] )
+            if subj_strict:
+                Files = Files.sort_values( by=['n_rows', 'tdiffa','pGUIDmatch','exp_t0','exper',            'diagnos','naming_ok','fname_exp_match','modified_time'],
+                                    ascending=[  False,    True,     False,     True,    True,                True,      False,         False,False])
+            else:
+                Files = Files.sort_values( by=['n_rows', 'tdiffa',             'exp_t0','exper',            'diagnos',            'fname_exp_match','modified_time'],
+                                    ascending=[  False,    True,                True,    True,                 True,                     False,False])
             Files = Files.drop('tdiffa', axis=1)
+
         else:
             Files['tdiff']  = float('nan')
-            Files = Files.sort_values( by=['pGUIDmatch', 'exp_t0', 'exper', 'diagnos', 'naming_ok', 'fname_exp_match'], ascending=[False, True, True, True, False, False] )
+            if subj_strict:
+                    Files = Files.sort_values( by=['pGUIDmatch', 'n_rows', 'diagnos', 'modified_time', 'fname_exp_match', 'naming_ok'], ascending=[False, False, True, False, False, False])
+            else:
+                Files = Files.sort_values( by=['n_rows',                       'exp_t0','exper','behav_only','diagnos',            'fname_exp_match','modified_time'],
+                                    ascending=[ False,                           True,   True,     True,       True,                     False,        False])
 
         if Verbose or not optn2:
             print('Files:')
@@ -1046,11 +1197,12 @@ def List_and_Pick_Files( fname, optn, fname_out, subj, ref_time_arg, task_arg, o
             print( Files.iloc[0].to_frame().T )
 
         # Select top file in list for further processing
-        fname = f_path + '/' + Files.iloc[0]['file']
+        fname = file_dir + '/' + Files.iloc[0]['file']
         pGUIDmatch = Files.iloc[0]['pGUIDmatch']
         tdiff      = Files.iloc[0]['tdiff']
         run        = Files.iloc[0]['run']
         run_t0     = Files.iloc[0]['run_t0']
+        behav_only = Files.iloc[0]['behav_only']
 
         EPrime_Info, EPrime_Data  =  EPrime_Info_and_Data_get( fname )
 
@@ -1061,6 +1213,7 @@ def List_and_Pick_Files( fname, optn, fname_out, subj, ref_time_arg, task_arg, o
         EPrime_Info['tdiff']  = tdiff
         EPrime_Info['run']    = run
         EPrime_Info['run_t0'] = run_t0
+        EPrime_Info['behav_only'] = behav_only
 
         if 'Info' in optn2:
             # EPrime_Info['dir_found']  = 1
@@ -1070,37 +1223,23 @@ def List_and_Pick_Files( fname, optn, fname_out, subj, ref_time_arg, task_arg, o
             # print('EPrime_Info:')
             # print( EPrime_Info )
 
+            # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+            # 22apr18: check for a valid number of runs in file, and use datime_ok to report result
             if task_arg == EPrime_Info['exper'][0:tan]:
-                if EPrime_Info['exper'] == 'nBack_Rec':
-                    EPrime_Info['exper_ok'] = 1
-                else:
-                    if 0 < EPrime_Info['nruns'] and EPrime_Info['nruns'] <= nruns_max:
-                        EPrime_Info['exper_ok'] = 1
-                    else:
-                        EPrime_Info['exper_ok'] = 0
+                EPrime_Info['exper_ok'] = 1
             else:
                 EPrime_Info['exper_ok'] = 0
 
-            # if (EPrime_Info['exper'] == task_arg) and (0 < EPrime_Info['nruns'] and EPrime_Info['nruns'] <= nruns_max):
-            #     EPrime_Info['exper_ok'] = 1
-            # else:
-            #     EPrime_Info['exper_ok'] = 0
-
-            # print_EPrime_info( EPrime_Info, header_show )
-
-        # else:
-        #     print_EPrime_info( EPrime_Info )
-
-        # if optn2 == 'ExportFile':
-        #     ok, msg  =  ExportFile( EPrime_Data, fname_out )
-        #     EPrime_Info['fout_ok']  = ok
-        #     EPrime_Info['fout_msg'] = msg
-
-    # else:
-    #     print_EPrime_info( EPrime_Info, header_show )
+            if 0 < EPrime_Info['nruns'] and EPrime_Info['nruns'] <= nruns_max:
+                pass
+            else:
+                EPrime_Info['datime_ok'] = 0
+                EPrime_Info['msg'] += ('Invalid number of runs: %.0f. ' % EPrime_Info['nruns'])
+            # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
     return Files, EPrime_Info, EPrime_Data
 # ---------------------------------------------------------------------------------------------------------------
+
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -1113,7 +1252,7 @@ def print_EPrime_info( EPrime_Info, header_show ):
     hn = len( head_vars )
     for j, var in enumerate( head_vars ):
         if var == 'pGUIDmatch':
-            print( 1 if EPrime_Info['pGUIDmatch'] > 10.0 else 0, end='' )
+            print( 1 if EPrime_Info['pGUIDmatch'] >= pGUIDmatch_ratio_min else 0, end='' )
         else:
             print( EPrime_Info[var], end='' )
         if (j+1) < hn:
@@ -1172,14 +1311,14 @@ def eprime_file_find_and_interpret( fname, optn1, fname_out, ref_time_arg='', su
         else:
             EPrime_Info['msg'] = 'Error: fname points to a file and command is not a valid file command'
 
-    else:   # Path expected to be directory or invalid
+    else:   # Path expected is a directory or invalid
         if dir_found:
             EPrime_Info['dir_found']  = 1
             EPrime_Info['file_found'] = 0   # Set below; for example after picking a file from inside a specified subdir
 
             if optn1 in ['ListFiles', 'PickFile']:
 
-                Files, EPrime_Info, EPrime_Data  =  List_and_Pick_Files( fname, optn1, fname_out, subj, ref_time_arg, task_arg, optn2, header_show )
+                Files, EPrime_Info, EPrime_Data  =  List_and_Pick_Files( fname, optn1, fname_out, subj, ref_time_arg, task_arg, optn2, header_show, subj_strict=True )
 
                 if EPrime_Info['ok'] and (optn1 == 'ListFiles'):
                     EPrime_Info['diagnos'] = 0
@@ -1221,3 +1360,19 @@ if __name__ == "__main__":
     else:
         sys.exit( 64 )   # 64 => command line usage error
 # =============================================================================================================================================
+
+
+
+
+            # print('-  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  ')
+            # print('EPrime_Info:', EPrime_Info )
+            # print('-  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  \n')
+
+
+    # else:
+    #     for ri, row in Files.iterrows():
+    #         # when reporting more than one file, diagnos will reflect the largest number in the files' diagnostic codes (this is arbitrary, of course)
+    #         if EPrime_Info['diagnos'] <= 0 and row['diagnos'] > EPrime_Info['diagnos']:
+    #             EPrime_Info['diagnos'] = row['diagnos']
+    #         if row['msg'] not in EPrime_Info['msg']:
+    #             EPrime_Info['msg'] += row['msg']

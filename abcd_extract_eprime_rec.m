@@ -31,7 +31,9 @@ function [errcode,behav,errmsg] = abcd_extract_eprime_rec(fnamewm,fnamerec,varar
 % Prev Mod: 11/03/20 by Don Hagler
 % Prev Mod: 08/31/21 by Don Hagler
 % Last Mod: 02/10/22 by Octavio Ruiz
-% Last Mod: 04/22/22 by Don Hagler
+% Prev Mod: 04/22/22 by Don Hagler
+% Prev Mod: 05/20/24 by Don Hagler
+% Last Mod: 05/24/24 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -63,6 +65,10 @@ if ~parms.errcode_nback
   [event_info_rec,event_info_proc_rec,errcode,errmsg] = get_event_info_rec(parms); 
   if errcode, return; end;
   
+  % check for no responses 
+  [nresp, errcode, errmsg] = check_no_responses(event_info_rec,parms);
+  if errcode, return; end;
+          
   % switch buttons if necesary for REC 
   [event_info_rec,~,parms.switch_flag,errcode,errmsg] = rec_switch(event_info_rec,event_info_proc_rec,parms); 
   if errcode, return; end;
@@ -138,11 +144,11 @@ function parms = check_input(fnamewm,fnamerec,options)
   if ~exist(parms.fnamerec,'file')
     error('%s: file %s not found',mfilename,parms.fnamerec);
   end;
-  [~,fstem,~] = fileparts(parms.fnamerec);
   % remove problematic characters
   if isempty(parms.outstem)
-    parms.outstem = abcd_clean_fstem(fstem);
-  end;
+    [~,parms.outstem] = fileparts(parms.fnamerec);
+  end
+  parms.outstem = abcd_clean_fstem(parms.outstem);
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -171,7 +177,7 @@ function [event_info_wm,event_info_proc_wm,errcode,errmsg] = get_event_info_wm(p
   try
     % write event info to file
     fnamewm_csv = abcd_check_eprime_sprdsh(parms.fnamewm, parms.colnameswm,...
-           parms.fieldnameswm, parms.outdir, parms.forceflag, parms.verbose);
+           parms.fieldnameswm, parms.outdir, [parms.outstem '_WM'], parms.forceflag, parms.verbose);
     event_info_wm = mmil_csv2struct(fnamewm_csv);
   catch me
     if parms.verbose, fprintf('%s: ERROR: failed to read or interpret e-prime file %s:\n%s\n',...
@@ -200,7 +206,7 @@ function [event_info_rec,event_info_proc_rec,errcode,errmsg] = get_event_info_re
   try 
     % write event info to file
     fnamerec_csv = abcd_check_eprime_sprdsh(parms.fnamerec, parms.colnamesrec,...
-            parms.fieldnamesrec, parms.outdir, parms.forceflag, parms.verbose);
+            parms.fieldnamesrec, parms.outdir, parms.outstem, parms.forceflag, parms.verbose);
     event_info_rec = mmil_csv2struct(fnamerec_csv); 
   catch me
     if parms.verbose, fprintf('%s: ERROR: failed to read or interpret e-prime file %s:\n%s\n',...
@@ -228,6 +234,24 @@ function [event_info_rec,event_info_proc_rec,errcode,errmsg] = get_event_info_re
   event_info_proc_rec = event_info_rec;
   event_info_rec = event_info_rec(ind_events);
 
+return;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% check for no responses
+function [nresp, errcode, errmsg] = check_no_responses(event_info,parms)
+  nresp = 0; errcode = 0; errmsg = [];
+  % check stim_resp_block
+  stim_resp_block = {event_info.stim_resp_block};
+  % count number of responses
+  nresp = nnz(~cellfun(@isempty,stim_resp_block));
+  % if no responses, set errcode and errmsg
+  if nresp == 0
+    if parms.verbose, fprintf('%s: ERROR: no responses in %s\n',mfilename,parms.fnamerec); end
+    errcode = 1;
+    errmsg = 'no responses';
+    return;
+  end
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -311,17 +335,12 @@ function [switch_flag,accuracy,errcode,errmsg] = rec_switch_flag(event_info,parm
   accuracy = 100*correct/correct_total;
   if parms.verbose, fprintf('%s: accuracy = %0.1f%%\n',mfilename,accuracy); end
 
-  if accuracy == 0
-    if parms.verbose, fprintf('%s: ERROR: accuracy equals zero for %s\n',mfilename,parms.fnamerec); end
-    errcode = 1;
-    errmsg = 'accuracy equals zero';
-    return; 
-  elseif accuracy < 100*parms.switch_thresh
+  if accuracy < 100*parms.switch_thresh
     if parms.verbose, fprintf('%s: accuracy < %0.1f%%, switching button responses\n',...
                               mfilename,100*parms.switch_thresh); end
     switch_flag = 1;
-  end;
-  
+  end
+
 return; 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
