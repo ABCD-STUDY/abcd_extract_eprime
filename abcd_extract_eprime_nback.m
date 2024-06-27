@@ -49,15 +49,8 @@ function [eprime_nruns,eprime_runs,errcode,behav,errmsg] = abcd_extract_eprime_n
 % Prev Mod: 08/18/21 by Don Hagler
 % Prev Mod: 02/10/22 by Octavio Ruiz
 % Prev Mod: 04/22/22 by Don Hagler
-% Prev Mod: 05/02/23 by Don Hagler
-% Prev Mod: 05/01/24 by Don Hagler
-% Prev Mod: 05/07/24 by Don Hagler
-% Prev Mod: 05/14/24 by Don Hagler
-% Prev Mod: 05/17/24 by Don Hagler
-% Prev Mod: 05/24/24 by Don Hagler
-% Prev Mod: 06/06/24 by Don Hagler
-% Prev Mod: 06/13/24 by Don Hagler
-% Last Mod: 06/14/24 by Don Hagler
+% Prev Mod: 06/14/24 by Don Hagler
+% Last Mod: 06/24/24 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -203,7 +196,8 @@ function parms = check_input(fname,options)
     'expected_init_delay_GE_run2',0,[],...
     'expected_init_delay_Siemens',0,[],...
     'start_delay_Siemens',6.4,[],...
-    'delay_diff_tol',1.0,[],...
+    'max_start_diff',0.5,[],...
+    'max_init_diff',5.0,[],...
     ...
     'colnames',  {'NARGUID','SessionDate','SessionTime','ExperimentName','ExperimentVersion',...
                   'Procedure[Block]','BlockType','StimType',...
@@ -552,10 +546,37 @@ function [event_info,start_time,all_types,all_stims,all_targets,all_procs,errcod
     start_time = start_time(1:length(init_time));
   end
 
+  if ge_flag
+    % check whether start delay diff is an integer multiple of TR
+    %   indicating missed triggers
+    if length(start_time)==1
+      ex_start_delay = expected_start_delay(1);
+    else
+      ex_start_delay = expected_start_delay;
+    end
+    start_delay_diff = (start_time - trig_time) - 1000*ex_start_delay;
+    start_delay_diff_TR = start_delay_diff / (1000 * parms.TR);
+    start_delay_diff_TR_int = round(start_delay_diff_TR);
+    idx_miss = find(ismember(start_delay_diff_TR_int,[1:3]) & abs(start_delay_diff_TR - start_delay_diff_TR_int) <= 0.01);
+    if ~isempty(idx_miss)
+      if parms.verbose
+        for i=1:length(idx_miss)
+          fprintf('%s: WARNING: adjusting start_time for run %d by %0.2f seconds due to indications of missed triggers\n',...
+            mfilename,idx_miss(i),start_delay_diff(idx_miss(i))/1000);
+        end
+      end
+      % adjust start_time by subtracting start_delay_diff
+      start_time(idx_miss) = start_time(idx_miss) - start_delay_diff(idx_miss);
+      %% NOTE: start_time represents the start of the non-dummy imaging volume
+      %%       init_time is when the stimulus starts
+    end
+  end
+
   % check for disparity between trig_time and init_time
   abcd_check_eprime_timing(trig_time,start_time,init_time,...
     expected_start_delay,expected_init_delay,...
-    parms.outdir,parms.outstem,parms.delay_diff_tol,...
+    parms.outdir,parms.outstem,...
+    parms.max_start_diff,parms.max_init_diff,...
     parms.verbose);
 
   % get block, stim, and target types for events
