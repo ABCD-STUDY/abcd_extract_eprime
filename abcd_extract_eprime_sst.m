@@ -368,13 +368,15 @@ function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms
   all_types = {event_info.type};
 
   % check go_resp
-  go_resp = {event_info.go_resp};
-  fix_resp = {event_info.fix_resp};
-  stop_resp = {event_info.stop_resp};
-  go_cresp = {event_info.go_cresp};  
-  if any(cellfun(@isstr,go_resp)) || any(cellfun(@iscell,go_resp)) ||...
-     any(cellfun(@isstr,fix_resp)) || any(cellfun(@iscell,fix_resp)) ||...
-     any(cellfun(@isstr,stop_resp)) || any(cellfun(@iscell,stop_resp))     
+  go_resp = replace_cells({event_info.go_resp});
+  fix_resp = replace_cells({event_info.fix_resp});
+  stop_resp = replace_cells({event_info.stop_resp});
+  ssd_resp = replace_cells({event_info.ssd_resp});
+  go_cresp = replace_cells({event_info.go_cresp});
+
+  if any(cellfun(@isstr,go_resp)) || any(cellfun(@isstr,fix_resp)) ||...
+     any(cellfun(@isstr,stop_resp)) || any(cellfun(@isstr,ssd_resp)) ||...
+     any(cellfun(@isstr,go_cresp))
     if ~any(cellfun(@isstr,go_cresp))
       if parms.verbose
         fprintf('%s: ERROR: string go_resp values without string go_cresp values in e-prime file %s\n',...
@@ -402,73 +404,76 @@ function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms
           uniq_go_cresp_nums(i) = i;
           uniq_go_cresp_names{i} = k.char;
         else
-          if parms.verbose
-            fprintf('%s: ERROR: string go_cresp with unexpected pattern (%s) in e-prime file %s\n',...
-              mfilename,uniq_go_cresp{i},parms.fname);
+          % check for 'LEFTARROW' or 'RIGHTARROW'
+          if all(ismember(uniq_go_cresp,{'LEFTARROW','RIGHTARROW'}))
+            uniq_go_cresp_nums(i) = find(strcmp(uniq_go_cresp{i},{'LEFTARROW','RIGHTARROW'}));
+            uniq_go_cresp_names{i} = uniq_go_cresp{i};
+          else
+            if parms.verbose
+              fprintf('%s: ERROR: string go_cresp with unexpected pattern (%s) in e-prime file %s\n',...
+                mfilename,uniq_go_cresp{i},parms.fname);
+            end
+            errcode = 1;
+            errmsg = sprintf('string go_cresp with unexpected pattern (%s)',uniq_go_cresp{i});
+            return;
           end
-          errcode = 1;
-          errmsg = sprintf('string go_cresp with unexpected pattern (%s)',uniq_go_cresp{i});
-          return;
-        end;
+        end
       end        
-    end;
+    end
     if parms.verbose
-      if parms.verbose
-        fprintf('%s: WARNING: replacing go_resp strings with numeric\n', mfilename);
-      end
+      fprintf('%s: WARNING: replacing go_resp strings with numeric\n', mfilename);
     end;
     for i=1:length(event_info)
       % assign numbers to each go_resp
-      go_resp = event_info(i).go_resp;
-      if iscell(go_resp), go_resp = go_resp{1}; end;
-      if isstr(go_resp)
-        k = find(strcmp(go_resp,uniq_go_cresp_names));
-        go_resp = uniq_go_cresp_nums(k);
+      tmp_go_resp = go_resp{i};
+      if isstr(tmp_go_resp)
+        k = find(strcmp(tmp_go_resp,uniq_go_cresp_names));
+        tmp_go_resp = uniq_go_cresp_nums(k);
       end;
-      event_info(i).go_resp = go_resp;
+      event_info(i).go_resp = tmp_go_resp;
       % assign numbers to each fix_resp
-      fix_resp = event_info(i).fix_resp;
-      if iscell(fix_resp), fix_resp = fix_resp{1}; end;
-      if isstr(fix_resp)
-        k = find(strcmp(fix_resp,uniq_go_cresp_names));
-        fix_resp = uniq_go_cresp_nums(k);
+      tmp_fix_resp = fix_resp{i};
+      if isstr(tmp_fix_resp)
+        k = find(strcmp(tmp_fix_resp,uniq_go_cresp_names));
+        tmp_fix_resp = uniq_go_cresp_nums(k);
       end;
-      event_info(i).fix_resp = fix_resp;
+      event_info(i).fix_resp = tmp_fix_resp;
       % assign numbers to each stop_resp
-      stop_resp = event_info(i).stop_resp;
-      if iscell(stop_resp), stop_resp = stop_resp{1}; end;
-      if isstr(stop_resp)
-        k = find(strcmp(stop_resp,uniq_go_cresp_names));
-        stop_resp = uniq_go_cresp_nums(k);
+      tmp_stop_resp = stop_resp{i};
+      if isstr(tmp_stop_resp)
+        k = find(strcmp(tmp_stop_resp,uniq_go_cresp_names));
+        tmp_stop_resp = uniq_go_cresp_nums(k);
       end;
-      event_info(i).stop_resp = stop_resp;
+      event_info(i).stop_resp = tmp_stop_resp;
       % assign numbers to each ssd_resp
-      ssd_resp = event_info(i).ssd_resp;
-      if iscell(ssd_resp), ssd_resp = ssd_resp{1}; end;
-      if isstr(ssd_resp)
-        k = find(strcmp(ssd_resp,uniq_go_cresp_names));
-        ssd_resp = uniq_go_cresp_nums(k);
+      tmp_ssd_resp = ssd_resp{i};
+      if isstr(tmp_ssd_resp)
+        k = find(strcmp(tmp_ssd_resp,uniq_go_cresp_names));
+        tmp_ssd_resp = uniq_go_cresp_nums(k);
       end;
-      event_info(i).ssd_resp = ssd_resp;
-    end;
-  end;
-  
-  % check go_cresp
-  if any(cellfun(@isstr,{event_info.go_cresp}))
-    if parms.verbose
-      fprintf('%s: WARNING: replacing go_cresp strings with numeric\n', mfilename);
+      event_info(i).ssd_resp = tmp_ssd_resp;
+      % assign numbers to each go_cresp
+      tmp_go_cresp = go_cresp{i};
+      if isstr(tmp_go_cresp)
+        k = find(strcmp(tmp_go_cresp,uniq_go_cresp_names));
+        tmp_go_cresp = uniq_go_cresp_nums(k);
+      end;
+      event_info(i).go_cresp = tmp_go_cresp;
     end
-    for i=1:length(event_info)
-      if isstr(event_info(i).go_cresp)
-        % remove text description of response
-        %   allow either '1{LEFTARROW}' or '1,{LEFTARROW}'
-        event_info(i).go_cresp = str2num(regexprep(event_info(i).go_cresp,'[,{].+',''));
-      end;
-    end;
-  end;
+  end
   
   % reset variables indicating accurate responses
   event_info = sst_acc(event_info);
+
+return;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+function vals = replace_cells(vals)
+  if any(cellfun(@iscell,vals))
+    ind_cell = find(cellfun(@iscell,vals));
+    vals(ind_cell) = cellfun(@(x) x{1},vals(ind_cell),'UniformOutput',false);
+  end
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

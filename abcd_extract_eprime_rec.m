@@ -206,7 +206,7 @@ function [event_info_rec,event_info_proc_rec,errcode,errmsg] = get_event_info_re
   try 
     % write event info to file
     fnamerec_csv = abcd_check_eprime_sprdsh(parms.fnamerec, parms.colnamesrec,...
-            parms.fieldnamesrec, parms.outdir, parms.outstem, parms.forceflag, parms.verbose);
+            parms.fieldnamesrec, parms.outdir, [parms.outstem '_REC'], parms.forceflag, parms.verbose);
     event_info_rec = mmil_csv2struct(fnamerec_csv); 
   catch me
     if parms.verbose, fprintf('%s: ERROR: failed to read or interpret e-prime file %s:\n%s\n',...
