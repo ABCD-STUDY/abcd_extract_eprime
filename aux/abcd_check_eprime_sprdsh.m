@@ -34,7 +34,8 @@ function fname_out = abcd_check_eprime_sprdsh(fname,cols,fields,outdir,outstem,f
 % Prev Mod: 07/02/20 by Don Hagler
 % Prev Mod: 08/28/20 by Don Hagler
 % Prev Mod: 11/01/20 by Don Hagler
-% Last Mod: 05/24/24 by Don Hagler
+% Prev Mod: 05/24/24 by Don Hagler
+% Last Mod: 08/28/24 by Don Hagler
 %
 
 % Based on abcd_check_eprime_encoding.m
@@ -109,7 +110,7 @@ if ~exist(fname_out,'file') || forceflag
     if verbose, fprintf('%s: reading e-prime file...\n',mfilename); end
     % check for UTF-16, convert to ASCII if necessary
     % read input file, allowing either comma or tab delimited
-    fname_ck = abcd_check_eprime_encoding(fname,outdir,forceflag);
+    fname_ck = abcd_check_eprime_encoding(fname,outdir,outstem,forceflag);
   end;
 
   if ~isempty(cols) || ~isempty(fields)

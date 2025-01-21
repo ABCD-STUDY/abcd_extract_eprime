@@ -3,6 +3,7 @@
 import sys, io, os
 import datetime, dateutil.parser
 import numpy as np
+from itertools import groupby
 
 # Import pandas, avoiding warning
 import warnings
@@ -113,11 +114,7 @@ def program_description():
     print('  fname            Full file fname')
     print()
     print('Use: "echo $?" to check exit status code')
-    print("""
-Version notes:
-  This version (22jun16) searchs for a column-names row, by checking the pressence of 'ExperimentName' in the row.
-  This additional criteriumn should not affect previouos outcomes, because 'ExperimentName' was already expected and the file reported as invalid if the variable was not present
-      """)
+    print()
     print('Examples:')
     print('  ./eprime_sprdsht_get.py   partic1  PickFile  "20170520 164900"  ""  ""  Info')
     print('  ./eprime_sprdsht_get.py   partic1  PickFile  "20170520 164900"  NDAR_INVJPLWZ1Z0  ""   Info')
@@ -530,6 +527,100 @@ def extract_ini_time( data, Info, exp_diagnos ):
     return Info, ok, msg, exp_diagnos
 # ---------------------------------------------------------------------------------------------------------------
 
+def check_eprime_timing(data, info):
+    """
+    Check the timing of eprime data and provide judgement based on trigger intervals.
+
+    Parameters:
+    - data: pandas DataFrame
+        The eprime data containing timing information.
+    - info: dict
+        A dictionary with eprime information where judgement and timing statistics will be added.
+
+    Returns:
+    - info: dict
+        The updated dictionary with judgement and timing statistics.
+
+    """
+    triggers = []
+    
+    if Verbose:
+        print(f"Checking timing for Experiment: {data.iloc[0]['ExperimentName']}")
+        
+    if 'ExperimentName' not in data.columns:
+        if Verbose:
+            print('ExperimentName not found in data.columns')
+        return info
+    # Check timing only on GE files
+    if not '_GE_' in data.iloc[0]['ExperimentName']:
+        if Verbose:
+            print('Experiment is not GE')
+        return info
+
+    # Check for GetReady.RTTime or Wait4Scanner.RTTime
+    if 'GetReady.RTTime' not in data.columns and 'GetReady2.RTTime' not in data.columns:
+        if Verbose:
+            print('Unable to find GetReady.RTTime or GetReady2.RTTime in eprime file')
+        return info
+    if 'GetReady.RTTime' in data.columns:
+        triggers = data['GetReady.RTTime'].tolist()
+    if 'GetReady2.RTTime' in data.columns:
+        triggers.extend(data['GetReady2.RTTime'].tolist())
+
+    # Group triggers separated by nan values
+    trigger_times_list = [list(group) for k, group in groupby(triggers, lambda x: np.isnan(x)) if not k]
+
+    # Verify that there are at most 2 runs
+    if len(trigger_times_list) > 2:
+        if Verbose:
+            print('Number of runs is greater than 2')
+        return info
+    
+    # Loop through each set of triggers
+    for i, trigger_times in enumerate(trigger_times_list):
+        run_number = i + 1
+
+        # Substract the first trigger time from all trigger times
+        trigger_times = [trigger_time - trigger_times[0] for trigger_time in trigger_times]
+
+        info[f'trigger_times_run_{run_number}'] = trigger_times
+
+        # Verify that we have sets of 16 triggers (16 for each run)
+        if len(trigger_times) != 16:
+            if Verbose:
+                print(f'Number of triggers not matching 16 for run {run_number}')
+            continue
+        
+        # Divide trigger times by 1000 to convert to seconds
+        trigger_times = [trigger_time / 1000 for trigger_time in trigger_times]
+        
+        # Calculate the difference between each trigger times
+        trigger_intervals = np.diff(trigger_times)
+        mean_interval = np.mean(trigger_intervals)
+
+        # Check for trigger conditions
+        if not trigger_intervals.any():
+            judgement = 'missing triggers'
+        elif np.all(trigger_intervals > 0.799) and np.all(trigger_intervals < 0.801):
+            judgement = 'ideal'
+        elif np.all(trigger_intervals >= 0.79) and np.all(trigger_intervals <= 0.81):
+            judgement = 'ok'
+        elif trigger_intervals[1] > 1 and np.all(trigger_intervals[1:] <= 0.83) and np.all(trigger_intervals[1:] >= 0.77):
+            judgement = 'prepscan'
+        elif np.all(trigger_intervals < 0.3):
+            judgement = 'fieldmap'
+        elif np.any(trigger_intervals > 10):
+            judgement = 'huge delay'
+        elif np.any(trigger_intervals > 1):
+            judgement = 'large delay'
+        elif np.any(trigger_intervals < 0.5):
+            judgement = 'small delay'
+        elif mean_interval >= 0.76 and mean_interval <= 0.84:
+            judgement = 'questionable'
+        else:
+            judgement = 'other'
+        info[f'trigger_judgement_run_{run_number}'] = judgement
+    return info
 
 # ---------------------------------------------------------------------------------------------------------------
 def extract_nruns_delays_and_times( data, exper, exp_datime ):
@@ -816,6 +907,7 @@ def EPrime_Info_and_Data_get( fname ):
         Info['msg'] += 'Unable to extract or interpret date or time. '
 
     if Info['ok']:
+        Info = check_eprime_timing(data, Info)
         Info['exp_datime'] = exp_datime
 
         if  Info['exper'] == 'nBack_Rec':
@@ -979,11 +1071,20 @@ def List_and_Pick_Files( file_dir, optn, fname_out, subj, ref_time_arg, task_arg
                 # if EPrime_Info['exper'] in ['MID','SST'] and EPrime_Info['datime_ok']:
                 #     if Verbose:
                 #         print('Experiment is a MID or SST task:', EPrime_Info['exper'])
+                trigger_times = ''
+                trigger_judgement = ''
                 if EPrime_Info['exper'] in ['MID','SST','nBack_WM'] and EPrime_Info['datime_ok']:
                     if Verbose:
                         print('Experiment is a MID, SST, or nBack_WM task:', EPrime_Info['exper'])
 
                     for ri in range( 0, EPrime_Info['nruns'] ):
+                        if ri+1 == 1:
+                            trigger_times = ' '.join(map(str, EPrime_Info['trigger_times_run_1'])) if 'trigger_times_run_1' in EPrime_Info else ''
+                            trigger_judgement = EPrime_Info['trigger_judgement_run_1'] if 'trigger_judgement_run_1' in EPrime_Info else ''
+                        elif ri+1 == 2:
+                            trigger_times = ' '.join(map(str, EPrime_Info['trigger_times_run_2'])) if 'trigger_times_run_2' in EPrime_Info else ''
+                            trigger_judgement = EPrime_Info['trigger_judgement_run_2'] if 'trigger_judgement_run_2' in EPrime_Info else ''
+
                         record = pd.DataFrame( dict({'file': fname,
                                                     'modified_time':    EPrime_Info['modified_time'],
                                                     'encoding':    EPrime_Info['encoding'],
@@ -1007,6 +1108,8 @@ def List_and_Pick_Files( file_dir, optn, fname_out, subj, ref_time_arg, task_arg
                                                     'pGUIDmatch':  pGUIDmatch,
                                                     'diagnos':     EPrime_Info['diagnos'],
                                                     'msg':         EPrime_Info['msg'],
+                                                    'trigger_times': trigger_times,
+                                                    'trigger_judgement': trigger_judgement,
                                                     'path': path }),  index=[j] )
                         Files = pd.concat([Files, record])
 
@@ -1037,6 +1140,8 @@ def List_and_Pick_Files( file_dir, optn, fname_out, subj, ref_time_arg, task_arg
                                                 'pGUIDmatch':  pGUIDmatch,
                                                 'diagnos':     EPrime_Info['diagnos'],
                                                 'msg':         EPrime_Info['msg'],
+                                                'trigger_times': trigger_times,
+                                                'trigger_judgement': trigger_judgement,
                                                 'path': path }),  index=[j] )
                     Files = pd.concat([Files, record])
 
@@ -1066,6 +1171,8 @@ def List_and_Pick_Files( file_dir, optn, fname_out, subj, ref_time_arg, task_arg
                                                 'pGUIDmatch':  pGUIDmatch,
                                                 'diagnos':     EPrime_Info['diagnos'],
                                                 'msg':         EPrime_Info['msg'],
+                                                'trigger_times': trigger_times,
+                                                'trigger_judgement': trigger_judgement,
                                                 'path': path }),  index=[j] )
                     Files = pd.concat([Files, record])
 
@@ -1097,7 +1204,7 @@ def List_and_Pick_Files( file_dir, optn, fname_out, subj, ref_time_arg, task_arg
     # Reorder columns
     Files = Files[['file', 'encoding', 'sep_tab', 'quoted_rows', 'hoffs', 'n_rows', 'n_cols',
                    'ok', 'contents_ok', 'exp_in_file', 'exper', 'behav_only', 'fname_exp_match', 'exp_datime', 'delay', 'exp_t0',
-                   'nruns', 'run', 'run_t0', 'naming_ok', 'pGUIDmatch', 'diagnos', 'msg', 'path', 'modified_time']]
+                   'nruns', 'run', 'run_t0', 'naming_ok', 'pGUIDmatch', 'diagnos', 'msg', 'path', 'modified_time', 'trigger_times', 'trigger_judgement']]
 
     # Sort by ok, date & time, interpreted or not, prefered format
     if subj_strict:
