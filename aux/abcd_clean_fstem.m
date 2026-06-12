@@ -4,7 +4,7 @@ function fstem_clean = abcd_clean_fstem(fstem)
 % Purpose special characters from output file stem
 %
 % Created:  11/01/2020 DH
-% Last Mod: 11/01/2020 DH
+% Last Mod: 02/02/2026 DH
 %
 
 if ~mmil_check_nargs(nargin,1), return; end;
@@ -19,5 +19,8 @@ fstem_clean = regexprep(fstem_clean,'[!@#$%^&*()\\?/]','');
 fstem_clean = regexprep(fstem_clean,'''','');
 % remove extra extension
 fstem_clean = regexprep(fstem_clean,'\..+','');
+% remove trailing "."
+fstem_clean = regexprep(fstem_clean,'\.$','');
 
 return;
+

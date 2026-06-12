@@ -6,7 +6,9 @@ function mmil_write_value(fid,value)
 %
 % Created:  02/25/11 by Don Hagler
 % Prev Mod: 10/07/13 by Don Hagler
-% Last Mod: 07/02/19 by Feng Xue
+% Prev Mod: 07/02/19 by Feng Xue
+% Prev Mod: 11/24/25 by Don Hagler
+% Last Mod: 12/19/25 by Don Hagler
 %
 
 if isfloat(value)
@@ -31,7 +33,7 @@ elseif isnumeric(value) || islogical(value)
   else
     fprintf(fid,'[%s]',sprintf('%d ',value));
   end;
-elseif ischar(value)
+elseif ischar(value) || isstring(value)
   fprintf(fid,'''%s''',value);
 elseif isempty(value)
   fprintf(fid,'[]');
@@ -42,6 +44,8 @@ elseif iscell(value)
     if k<length(value), fprintf(fid,' '); end;
   end;
   fprintf(fid,'}');
+elseif isdatetime(value)
+  fprintf(fid,'''%s''',datestr(value));
 else
   error('unrecognized type');
 end;
