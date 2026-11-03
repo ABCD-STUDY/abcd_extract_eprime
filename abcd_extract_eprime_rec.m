@@ -15,6 +15,11 @@ function [errcode,behav,errmsg] = abcd_extract_eprime_rec(fnamewm,fnamerec,varar
 %     {default = []}
 %   'switch_thresh': percent correct below which to swap button assignements
 %     {default = 0.3}
+%   'min_valid_trials': minimum number of trials with both a response and a
+%     correct-response value before a button-switch decision is attempted;
+%     below this, the accuracy estimate is too noisy to act on and no
+%     switch is attempted
+%     {default = 10}
 %   'forceflag': [0|1] overwrite existing output
 %     {default = 0}
 %   'verbose': [0|1] display messages
@@ -30,10 +35,12 @@ function [errcode,behav,errmsg] = abcd_extract_eprime_rec(fnamewm,fnamerec,varar
 % Prev Mod: 05/21/20 by Octavio Ruiz
 % Prev Mod: 11/03/20 by Don Hagler
 % Prev Mod: 08/31/21 by Don Hagler
-% Last Mod: 02/10/22 by Octavio Ruiz
+% Prev Mod: 02/10/22 by Octavio Ruiz
 % Prev Mod: 04/22/22 by Don Hagler
 % Prev Mod: 05/20/24 by Don Hagler
-% Last Mod: 05/24/24 by Don Hagler
+% Prev Mod: 05/24/24 by Don Hagler
+% Prev Mod: 07/07/26 by Don Hagler
+% Last Mod: 07/08/26 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -96,6 +103,7 @@ function parms = check_input(fnamewm,fnamerec,options)
     'outdir',pwd,[],...
     'outstem',[],[],...
     'switch_thresh',0.3,[0,0.5],...
+    'min_valid_trials',10,[],...
     'forceflag',false,[false true],...
     'verbose',true,[false true],...
     'errcode_nback',0,0:1,...
@@ -258,20 +266,33 @@ return;
 
 function [event_info,event_info_proc,switch_flag,errcode,errmsg] = rec_switch(event_info,event_info_proc,parms)
 
-  [event_info, event_info_proc] = rec_switch_resp_format(event_info,event_info_proc,parms); 
+  switch_flag = 0;
 
-  [switch_flag,acc1,errcode,errmsg] = rec_switch_flag(event_info,parms);  
+  [event_info, event_info_proc, errcode, errmsg] = rec_switch_resp_format(event_info,event_info_proc,parms);
   if errcode, return; end;
-   
-  if switch_flag 
-    [event_info, event_info_proc] = rec_switch_event(event_info,event_info_proc);
-    [~,acc2,~] = rec_switch_flag(event_info,parms);
-    if acc2 < acc1
-      [event_info, event_info_proc] = rec_switch_event(event_info,event_info_proc);
-       switch_flag = 0; 
-    end 
-  end 
-  
+
+  [switch_flag,acc1,errcode,errmsg] = rec_switch_flag(event_info,parms);
+  if errcode, return; end;
+
+  if switch_flag
+    codes = derive_switch_codes({event_info.stim_cresp_block});
+    if isempty(codes)
+      if parms.verbose
+        fprintf('%s: stim_cresp_block does not yield a unique response-code pair, skipping switch\n',mfilename);
+      end
+      switch_flag = 0;
+    else
+      [event_info, event_info_proc] = rec_switch_event(event_info,event_info_proc,codes);
+      [~,acc2,~] = rec_switch_flag(event_info,parms);
+      if acc2 <= acc1
+        [event_info, event_info_proc] = rec_switch_event(event_info,event_info_proc,codes);
+        switch_flag = 0;
+      elseif ~isequal(codes,[1 2]) && parms.verbose
+        fprintf('%s: switched using derived codes %g<->%g\n',mfilename,codes(1),codes(2));
+      end
+    end
+  end
+
   if switch_flag
     % write to csv
     fname_csv_out  = sprintf('%s/%s_events_switched.csv',...
@@ -285,47 +306,73 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
-function [event_info, event_info_proc] = rec_switch_event(event_info,event_info_proc)
+function [event_info, event_info_proc] = rec_switch_event(event_info,event_info_proc,codes)
 
   for i=1:length({event_info.stim_resp_block})
-    if event_info(i).stim_resp_block == 1
-      event_info(i).stim_resp_block = 2;
-    elseif event_info(i).stim_resp_block == 2
-      event_info(i).stim_resp_block = 1;
+    if event_info(i).stim_resp_block == codes(1)
+      event_info(i).stim_resp_block = codes(2);
+    elseif event_info(i).stim_resp_block == codes(2)
+      event_info(i).stim_resp_block = codes(1);
     end
     if event_info(i).stim_resp_block == event_info(i).stim_cresp_block
       event_info(i).stim_acc_block = 1;
-    else 
+    else
       event_info(i).stim_acc_block = 0;
-    end  
+    end
   end
   for i=1:length({event_info_proc.stim_resp_block})
-    if event_info_proc(i).stim_resp_block == 1
-      event_info_proc(i).stim_resp_block = 2; 
-    elseif event_info_proc(i).stim_resp_block == 2
-      event_info_proc(i).stim_resp_block = 1;
+    if event_info_proc(i).stim_resp_block == codes(1)
+      event_info_proc(i).stim_resp_block = codes(2);
+    elseif event_info_proc(i).stim_resp_block == codes(2)
+      event_info_proc(i).stim_resp_block = codes(1);
     end
     if (event_info_proc(i).stim_acc_block >= 0)
       if event_info_proc(i).stim_resp_block == event_info_proc(i).stim_cresp_block
          event_info_proc(i).stim_acc_block = 1;
-      else 
+      else
          event_info_proc(i).stim_acc_block = 0;
-      end 
+      end
     end
   end % for proc
-  
-return; 
+
+return;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+function codes = derive_switch_codes(cresp_cell)
+  % Derive the two response codes to flip from the correct-response
+  % field's own unique values (device/site wiring varies, e.g. some
+  % Philips sites use 3/4 instead of 1/2), rather than assuming 1/2.
+  % Returns [code_a,code_b] when exactly 2 unique non-empty values exist;
+  % [] when indeterminate (0, 1, or more than 2 values).
+  vals = cresp_cell(~cellfun(@isempty,cresp_cell));
+  uniq = unique(cell2mat(vals));
+  if numel(uniq)==2
+    codes = uniq;
+  else
+    codes = [];
+  end
+return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
-function [switch_flag,accuracy,errcode,errmsg] = rec_switch_flag(event_info,parms) 
-  
+function [switch_flag,accuracy,errcode,errmsg] = rec_switch_flag(event_info,parms)
+
   errcode = 0; errmsg = [];
-  switch_flag = 0; 
+  switch_flag = 0;
+  accuracy = NaN;
   correct_resp = {event_info.stim_cresp_block};
-  resp = {event_info.stim_resp_block}; 
-  correct_total = size(cell2mat({event_info.stim_cresp_block}),2);   
-  correct = 0;  
+  resp = {event_info.stim_resp_block};
+
+  n_valid = nnz(~cellfun(@isempty,resp) & ~cellfun(@isempty,correct_resp));
+  if n_valid < parms.min_valid_trials
+    if parms.verbose, fprintf('%s: only %d valid trials (< %d), skipping switch\n',...
+      mfilename,n_valid,parms.min_valid_trials); end
+    return;
+  end
+
+  correct_total = size(cell2mat({event_info.stim_cresp_block}),2);
+  correct = 0;
   
   for i=1:correct_total
     if correct_resp{i}==resp{i}
@@ -345,14 +392,37 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
-function [event_info, event_info_proc] = rec_switch_resp_format(event_info,event_info_proc,parms) 
+function [event_info, event_info_proc, errcode, errmsg] = rec_switch_resp_format(event_info,event_info_proc,parms)
+
+  errcode = 0; errmsg = [];
 
   correct_resp = {event_info.stim_cresp_block};
   correct_resp_proc = {event_info_proc.stim_cresp_block};
-  resp = {event_info.stim_resp_block}; 
+  resp = {event_info.stim_resp_block};
   resp_proc = {event_info_proc.stim_resp_block};
-  
-  if strcmp(correct_resp{1},'RIGHTARROW') || strcmp(correct_resp{1},'LEFTARROW')
+
+  % unwrap any 1-element cells (mmil_parsecells wraps a value entirely
+  % {braced} from position 1 into a 1-element cell containing the bare
+  % name; strcmp handles this automatically, but isstr/cellfun below do not)
+  for i=1:length(correct_resp)
+    if iscell(correct_resp{i}), correct_resp{i} = correct_resp{i}{1}; end
+  end
+
+  % get unique, non-empty, non-numeric correct-response values
+  uniq_correct_resp = unique(correct_resp(~cellfun(@isempty,correct_resp) & cellfun(@isstr,correct_resp)));
+  is_arrow_format = ~isempty(uniq_correct_resp) && all(ismember(uniq_correct_resp,{'RIGHTARROW','LEFTARROW'}));
+
+  if ~isempty(uniq_correct_resp) && ~is_arrow_format
+    if parms.verbose
+      fprintf('%s: ERROR: string stim_cresp_block with unexpected pattern in e-prime file %s\n',...
+        mfilename,parms.fnamerec);
+    end
+    errcode = 1;
+    errmsg = 'string stim_cresp_block with unexpected pattern';
+    return;
+  end
+
+  if is_arrow_format
     if parms.verbose, fprintf('%s: switching response format \n',mfilename); end
     for i=1:length(correct_resp)
       if strcmp(correct_resp{i},'RIGHTARROW') 
@@ -382,7 +452,7 @@ function [event_info, event_info_proc] = rec_switch_resp_format(event_info,event
         event_info_proc(i).stim_resp_block = 2;
       end
     end
-  end %if 'ARROW'
+  end %if is_arrow_format
 return; 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 

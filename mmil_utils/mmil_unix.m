@@ -2,8 +2,8 @@ function [status,result,errmsg]=mmil_unix(cmd,batch_limit,jflag)
 %function [status,result,errmsg]=mmil_unix(cmd,[batch_limit],[jflag])
 %
 % Purpose: execute a unix command
-%   moves MATLAB paths to bottom of LD_LIBRARY_PATH stack
-%   to simulate non-MATLAB shell environment.
+%   moves MATLAB paths to bottom of LD_LIBRARY_PATH stack and clears
+%   LD_PRELOAD to simulate non-MATLAB shell environment.
 %
 % Required Input:
 %   cmd : UNIX command-line to execute
@@ -26,7 +26,8 @@ function [status,result,errmsg]=mmil_unix(cmd,batch_limit,jflag)
 % Prev Mod: 07/15/19 by Feng Xue
 % Prev Mod: 07/02/20 by Don Hagler
 % Prev Mod: 04/26/21 by Don Hagler
-% Last Mod: 07/27/23 by Don Hagler
+% Prev Mod: 07/27/23 by Don Hagler
+% Last Mod: 07/14/26 by Don Hagler
 %
 
 status = 0; result = []; errmsg = [];
@@ -49,6 +50,12 @@ else
   newpath = [sprintf('%s:',newpaths{1:end-1}) newpaths{end}];
 end;
 setenv('LD_LIBRARY_PATH',newpath);
+
+% clear LD_PRELOAD so MATLAB's glibc shim (LD_PRELOAD'd on R2023a) does not
+% leak into the child shell; on CentOS 7 it otherwise prints
+% "glibc_shim: Didn't find correct code to patch" into the captured stdout
+ld_preload = getenv('LD_PRELOAD');
+setenv('LD_PRELOAD','');
 
 % split command into multiple lines
 cmd_list = regexp(cmd,'\n','split');
@@ -86,8 +93,9 @@ else
   end;
 end;
 
-% restore LD_LIBRARY_PATH
+% restore LD_LIBRARY_PATH and LD_PRELOAD
 setenv('LD_LIBRARY_PATH',path);
+setenv('LD_PRELOAD',ld_preload);
 
 if nargout==2
   result = [result errmsg];
