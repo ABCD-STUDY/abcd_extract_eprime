@@ -19,10 +19,25 @@ function [eprime_nruns,eprime_runs,errcode,behav,errmsg] = abcd_extract_eprime_n
 %     {default = 500}
 %   'minfrac': minimum fraction of a TR to register an event
 %     {default = 0.5}
-%   'nskipTRs': number of TRs to remove from beginning of time course
-%     {default = 0}
+%   'nskipTRs': number of dummy TRs before the first retained frame; sets
+%     start_time after a single trigger (the timing files are relative to
+%     start_time and are not trimmed)
+%     {default = []: 0 for a behavioral-only experiment (detected from
+%      ExperimentName); else computed from Manufacturer/SoftwareVersion
+%      via cmig_set_abcd_skipTRs() if given; else 0 with a warning}
+%   'Manufacturer': DICOM/BIDS Manufacturer field, used to compute
+%     nskipTRs when nskipTRs is [] (ignored otherwise)
+%     {default = []}
+%   'SoftwareVersion': DICOM SoftwareVersion(s) field, used to compute
+%     nskipTRs when nskipTRs is [] (ignored otherwise)
+%     {default = []}
 %   'switch_thresh': percent correct below which to swap button assignements
 %     {default = 0.3}
+%   'min_valid_trials': minimum number of trials with both a response and a
+%     correct-response value before a button-switch decision is attempted;
+%     below this, the accuracy estimate is too noisy to act on and no
+%     switch is attempted
+%     {default = 10}
 %   'error_flag': [0|1] encode error trials as separate events
 %     {default = 0}
 %   'extra_flag': [0|1] create timing files for extra, orthogonal event encoding
@@ -50,7 +65,12 @@ function [eprime_nruns,eprime_runs,errcode,behav,errmsg] = abcd_extract_eprime_n
 % Prev Mod: 02/10/22 by Octavio Ruiz
 % Prev Mod: 04/22/22 by Don Hagler
 % Prev Mod: 06/14/24 by Don Hagler
-% Last Mod: 06/24/24 by Don Hagler
+% Prev Mod: 06/24/24 by Don Hagler
+% Prev Mod: 07/07/26 by Don Hagler
+% Prev Mod: 07/27/26 by Don Hagler
+% Prev Mod: 07/29/26 by Don Hagler
+% Prev Mod: 07/31/26 by Don Hagler
+% Last Mod: 10/05/26 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -73,10 +93,10 @@ parms = check_input(fname,varargin);
 mmil_mkdir(parms.outdir);
 
 % create struct with info for each event
-[event_info,start_time,all_types,all_stims,all_targets,all_procs,errcode,errmsg] = get_event_info(parms);
+[event_info,start_time,all_types,all_stims,all_targets,all_procs,errcode,errmsg,parms] = get_event_info(parms);
 if errcode, return; end;
 
-% check for no responses 
+% check for no responses
 [nresp, errcode, errmsg] = check_no_responses(event_info,parms);
 if errcode, return; end;
         
@@ -179,8 +199,11 @@ function parms = check_input(fname,options)
     'TR',0.8,[],...
     'numTRs',500,[],...
     'minfrac',0.5,[0,1],...
-    'nskipTRs',0,[],...
+    'nskipTRs',[],[],...
+    'Manufacturer',[],[],...
+    'SoftwareVersion',[],[],...
     'switch_thresh',0.3,[0,0.5],...
+    'min_valid_trials',10,[],...
     'error_flag',false,[false true],...
     'extra_flag',false,[false true],...
     'forceflag',false,[false true],...
@@ -251,9 +274,16 @@ function parms = check_input(fname,options)
   if isempty(parms.outstem)
     parms.outstem = abcd_clean_fstem(fstem);
   end;
-  % calculate time at the end of each TR
-  parms.TR_offset = linspace(parms.TR,parms.numTRs * parms.TR,parms.numTRs);
-  parms.TR_onset = parms.TR_offset - parms.TR;
+  % calculate time at the start/end of each TR. Direct multiplication
+  % (0:numTRs-1)*TR, not linspace(TR,numTRs*TR,numTRs) -- linspace's
+  % formula introduces a ~1 ULP rounding difference per grid point
+  % relative to k*TR, which occasionally flips the strict '<'/'>'
+  % TR-mask comparison right at a trial-onset tie exactly on a TR
+  % boundary. Python's grid already used direct multiplication; matching
+  % it here removes the discrepancy. See TODO.txt item 1b /
+  % SST_matlab_changes.txt for full detail.
+  parms.TR_onset  = (0:parms.numTRs-1) * parms.TR;
+  parms.TR_offset = parms.TR_onset + parms.TR;
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -327,16 +357,14 @@ function write_files(eventname,onset,offset,resp_times,ind_start,event_ref_time,
                          rel_offset(k)>(parms.TR_onset+parms.mindur));
           TR_mask(ind_rep) = 1;
         end;
-        % calculate event times from TR_onset
-        event_times = parms.TR_onset(find(TR_mask));
+        % no TRs removed: rel_onset is from start_time, already the first
+        %   retained frame (nskipTRs x TR after a single trigger), so the
+        %   grid starts there; trimming nskipTRs more (as from 07/31/26)
+        %   put the .1D and .txt nskipTRs TRs early
+        % calculate event times from TR_onset (0-based from start_time)
+        event_times = (find(TR_mask)-1)*parms.TR;
         % convert time units to multiples of TRs
         event_TRs = event_times/parms.TR;
-        % remove  nskipTRs
-        if parms.nskipTRs>0
-          TR_mask = TR_mask(parms.nskipTRs+1:end);
-          event_times = event_times(parms.nskipTRs+1:end) - parms.nskipTRs*parms.TR;
-          event_TRs = event_times/parms.TR; 
-        end;
         % write to 1D file
         fid = fopen(fname_1D,'wt');
         if fid<0, error('failed to open %s for writing',fname_1D); end;
@@ -423,8 +451,8 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [event_info,start_time,all_types,all_stims,all_targets,all_procs,errcode,errmsg] = get_event_info(parms)
-  
+function [event_info,start_time,all_types,all_stims,all_targets,all_procs,errcode,errmsg,parms] = get_event_info(parms)
+
   event_info=[]; start_time=[];
   all_types=[]; all_stims = []; all_targets = []; all_procs = [];
   errcode = 0; errmsg = [];
@@ -467,6 +495,30 @@ function [event_info,start_time,all_types,all_stims,all_targets,all_procs,errcod
   else
     expected_start_delay = parms.expected_start_delay_Siemens*[1,1];
     expected_init_delay = parms.expected_init_delay_Siemens*[1,1];
+  end
+
+  % resolve nskipTRs=[]: 0 for a behavioral-only experiment; else computed
+  % from Manufacturer/SoftwareVersion if given; else 0 with a warning.
+  % Missing imaging data is not special-cased -- it isn't behavioral, so it
+  % takes this same path. Resolved here (not in the caller) so it's
+  % available below for the single-trigger start_time formula.
+  if isempty(parms.nskipTRs)
+    if behav_flag
+      parms.nskipTRs = 0;
+    elseif ~isempty(parms.Manufacturer) || ~isempty(parms.SoftwareVersion)
+      % cmig_set_abcd_skipTRs() expects char fields -- an unsupplied
+      % Manufacturer/SoftwareVersion is [] (empty double) here, not ''
+      manufacturer = parms.Manufacturer; if isempty(manufacturer), manufacturer = ''; end
+      software_version = parms.SoftwareVersion; if isempty(software_version), software_version = ''; end
+      scan_info = struct('Manufacturer',manufacturer,...
+                          'SoftwareVersions',software_version);
+      parms.nskipTRs = cmig_set_abcd_skipTRs(scan_info);
+    else
+      parms.nskipTRs = 0;
+      if parms.verbose
+        fprintf('%s: WARNING: nskipTRs not supplied and no Manufacturer/SoftwareVersion given -- defaulting nskipTRs=0\n',mfilename);
+      end
+    end
   end
 
   % get trigger times
@@ -524,11 +576,10 @@ function [event_info,start_time,all_types,all_stims,all_targets,all_procs,errcod
   end
 
   if ~behav_flag && ~ge_flag
-    % NOTE: for behavioral only, only one trigger is sent/recorded
-    %       set start_time to trigger
-    % NOTE: for Siemens/Philips, only one trigger is sent/recorded
-    %       set start_time relative to trigger with the standard start delay for Siemens/Philips
-    start_time = start_time + 1000*parms.start_delay_Siemens;
+    % NOTE: for single-trigger files, use nskipTRs*TR instead of the
+    %       fixed start_delay_Siemens constant (numerically the same
+    %       for genuine Siemens/Philips hardware)
+    start_time = start_time + 1000*parms.nskipTRs*parms.TR;
   end
 
   % get init_time
@@ -613,11 +664,17 @@ function [event_info,start_time,all_types,all_stims,all_targets,all_procs,errcod
           uniq_correct_response_nums(i) = i;
           uniq_correct_response_names{i} = k.char;
         else
-          if parms.verbose, fprintf('%s: ERROR: string correct_response with unexpected pattern (%s) in e-prime file %s\n',...
-            mfilename,uniq_correct_response{i},parms.fname); end
-          errcode = 1;
-          errmsg = sprintf('string go_cresp with unexpected pattern (%s)',uniq_correct_response{i});
-          return;
+          % check for 'LEFTARROW' or 'RIGHTARROW'
+          if all(ismember(uniq_correct_response,{'LEFTARROW','RIGHTARROW'}))
+            uniq_correct_response_nums(i) = find(strcmp(uniq_correct_response{i},{'LEFTARROW','RIGHTARROW'}));
+            uniq_correct_response_names{i} = uniq_correct_response{i};
+          else
+            if parms.verbose, fprintf('%s: ERROR: string correct_response with unexpected pattern (%s) in e-prime file %s\n',...
+              mfilename,uniq_correct_response{i},parms.fname); end
+            errcode = 1;
+            errmsg = sprintf('string go_cresp with unexpected pattern (%s)',uniq_correct_response{i});
+            return;
+          end
         end
       end
     end;
@@ -673,18 +730,28 @@ return;
 
 function [event_info,switch_flag,errcode,errmsg] = nback_switch(event_info,parms)
 
-  [switch_flag,acc1,errcode,errmsg] = nback_switch_flag(event_info,parms); 
+  [switch_flag,acc1,errcode,errmsg] = nback_switch_flag(event_info,parms);
   if errcode, return; end;
 
-  if switch_flag 
-    event_info = nback_switch_event(event_info);
-    [~,acc2,~] = nback_switch_flag(event_info,parms);
-    if acc2 < acc1
-      event_info = nback_switch_event(event_info);
-      switch_flag = 0; 
-    end 
+  if switch_flag
+    codes = derive_switch_codes({event_info.correct_response});
+    if isempty(codes)
+      if parms.verbose
+        fprintf('%s: correct_response does not yield a unique response-code pair, skipping switch\n',mfilename);
+      end
+      switch_flag = 0;
+    else
+      event_info = nback_switch_event(event_info,codes);
+      [~,acc2,~] = nback_switch_flag(event_info,parms);
+      if acc2 <= acc1
+        event_info = nback_switch_event(event_info,codes);
+        switch_flag = 0;
+      elseif ~isequal(codes,[1 2]) && parms.verbose
+        fprintf('%s: switched using derived codes %g<->%g\n',mfilename,codes(1),codes(2));
+      end
+    end
   end
- 
+
   % write to csv
   if switch_flag 
     fname_csv_out  = sprintf('%s/%s_events_switched.csv',...
@@ -697,16 +764,25 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
-function [switch_flag,accuracy,errcode,errmsg] = nback_switch_flag(event_info,parms) 
+function [switch_flag,accuracy,errcode,errmsg] = nback_switch_flag(event_info,parms)
   errcode = 0; errmsg = [];
   switch_flag = 0;
+  accuracy = NaN;
 
   % remove non-events
   event_info = remove_non_events(event_info);
   % get responses
-  resp = {event_info.stim_resp}; 
+  resp = {event_info.stim_resp};
   % get correct responses
   correct_resp = {event_info.correct_response};
+
+  n_valid = nnz(~cellfun(@isempty,resp) & ~cellfun(@isempty,correct_resp));
+  if n_valid < parms.min_valid_trials
+    if parms.verbose, fprintf('%s: only %d valid trials (< %d), skipping switch\n',...
+      mfilename,n_valid,parms.min_valid_trials); end
+    return;
+  end
+
   correct_total = numel(correct_resp);
   % count number of responses that match correct response
   correct = 0;
@@ -727,21 +803,38 @@ return
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
-function event_info = nback_switch_event(event_info)
+function event_info = nback_switch_event(event_info,codes)
   for i=1:length({event_info.stim_resp})
-    if event_info(i).stim_resp == 1
-      event_info(i).stim_resp = 2; 
-    elseif event_info(i).stim_resp == 2
-        event_info(i).stim_resp = 1;
+    if event_info(i).stim_resp == codes(1)
+      event_info(i).stim_resp = codes(2);
+    elseif event_info(i).stim_resp == codes(2)
+        event_info(i).stim_resp = codes(1);
     end
     if (event_info(i).stim_acc >= 0)
       if event_info(i).stim_resp==event_info(i).correct_response
         event_info(i).stim_acc = 1;
-      else 
+      else
         event_info(i).stim_acc = 0;
       end
     end
-  end 
+  end
+return;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+function codes = derive_switch_codes(cresp_cell)
+  % Derive the two response codes to flip from the correct-response
+  % field's own unique values (device/site wiring varies, e.g. some
+  % Philips sites use 3/4 instead of 1/2), rather than assuming 1/2.
+  % Returns [code_a,code_b] when exactly 2 unique non-empty values exist;
+  % [] when indeterminate (0, 1, or more than 2 values).
+  vals = cresp_cell(~cellfun(@isempty,cresp_cell));
+  uniq = unique(cell2mat(vals));
+  if numel(uniq)==2
+    codes = uniq;
+  else
+    codes = [];
+  end
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 

@@ -19,7 +19,9 @@ function [stim_labels,conds_contrast] = abcd_set_contrasts_sst(short_flag)
 % Created:  12/14/16 by Don Hagler
 % Prev Mod: 10/03/17 by Dani Cornejo 
 % Prev Mod: 11/18/17 by Don Hagler
-% Last Mod: 06/20/24 by Don Hagler
+% Prev Mod: 06/20/24 by Don Hagler
+% Prev Mod: 08/14/2026 by Don Hagler
+% Last Mod: 10/21/2026 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -33,7 +35,7 @@ stim_labels = [];
 
 if short_flag
   condnames = {'cg','ig','clg','nrg',...
-               'ilg','cs','is','ss'};
+               'ilg','cs','is','es','zr'};
   names_contrast = {...
     'cgvfx'...
     'csvcg'...
@@ -63,7 +65,8 @@ if short_flag
   };
 else
   condnames = {'correct_go','incorrect_go','correctlate_go','noresp_go',...
-               'incorrectlate_go','correct_stop','incorrect_stop','ssd_stop'};
+               'incorrectlate_go','correct_stop','incorrect_stop','early_stop',...
+               'zero_ssd_response'};
   names_contrast = {...
     'correct_go_vs_fixation'...
     'correct_stop_vs_correct_go'...

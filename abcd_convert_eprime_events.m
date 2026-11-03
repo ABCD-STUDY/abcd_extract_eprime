@@ -35,7 +35,8 @@ function [eprime_nruns,eprime_runs,errcode] = abcd_convert_eprime_events(fname_e
 % Prev Mod: 05/21/24 by Don Hagler
 % Prev Mod: 05/22/24 by Don Hagler
 % Prev Mod: 05/24/24 by Don Hagler
-% Last Mod: 06/13/24 by Don Hagler
+% Prev Mod: 06/13/24 by Don Hagler
+% Last Mod: 05/22/26 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -149,12 +150,12 @@ function export_events(run,eprime_run,parms)
   skip_time = parms.skipTRs * parms.TR;
 
   % get condition names
-  switch parms.taskname
+  switch upper(parms.taskname)
     case 'MID'
       stim_labels = abcd_set_contrasts_mid();
     case 'SST'
       stim_labels = abcd_set_contrasts_sst();
-    case 'nBack'
+    case 'NBACK'
       stim_labels = abcd_set_contrasts_nback();
   end
 

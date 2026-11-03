@@ -90,9 +90,13 @@ function      [data, result]= readtext(fname, delimiter, comment, quotes, option
 % - No more (La)TeX formatting of file names. 
 % - Prefixed waitbar messages with '(readtext)'. 
 % Version 1.6, 2006-10-02:
-% - Better removal of comments. Could leave an empty first row before. 
-% - Added a 'usewaitbar' option. 
-% - Now removes empty last columns and rows. 
+% - Better removal of comments. Could leave an empty first row before.
+% - Added a 'usewaitbar' option.
+% - Now removes empty last columns and rows.
+% DH, 2026-07-31:
+% - Fixed: a file with exactly one quoted field left the quote-protection
+%   loop's guard (r<rEnd) false from the start, so that field's embedded
+%   delimiters were never nulled. Added a direct rEnd==1 special case.
 % 
 % TO DO:
 % - Write a better text macro. 
@@ -198,14 +202,25 @@ function      [data, result]= readtext(fname, delimiter, comment, quotes, option
 			n=		1;
 			nEnd=	length(delimS);
 			result.quote=	rEnd;
-			while((n < nEnd) && (r < rEnd)) % "Remove" delimiters and newlines within quyotes.
-				while((r <= rEnd) && (delimS(n) > exclE(r))), r= r+1;	end
-				while((n <= nEnd) && (delimS(n) < exclS(r))), n= n+1;	end
-				while((n <= nEnd) && (delimS(n) >= exclS(r)) && (delimS(n) <= exclE(r)))
-					delimS(n)=	0;
-					n=			n+1;
+			if(rEnd == 1)
+				% DH 07/31/2026: rEnd==1 (exactly one quoted field in the
+				% whole file) made the loop below never execute at all
+				% (r<rEnd is 1<1, false from the start), so that field's
+				% embedded delimiters were never protected. Handle this
+				% case directly instead of changing the loop below, which
+				% already works correctly for rEnd>=2.
+				mask=	(delimS >= exclS(1)) & (delimS <= exclE(1));
+				delimS(mask)=	0;
+			else
+				while((n < nEnd) && (r < rEnd)) % "Remove" delimiters and newlines within quyotes.
+					while((r <= rEnd) && (delimS(n) > exclE(r))), r= r+1;	end
+					while((n <= nEnd) && (delimS(n) < exclS(r))), n= n+1;	end
+					while((n <= nEnd) && (delimS(n) >= exclS(r)) && (delimS(n) <= exclE(r)))
+						delimS(n)=	0;
+						n=			n+1;
+					end
+					if((bitand(n, 255) == 0) && op_waitbar), waitbar(n/nEnd); end	% Update waitbar.
 				end
-				if((bitand(n, 255) == 0) && op_waitbar), waitbar(n/nEnd); end	% Update waitbar.
 			end
 			if(op_waitbar), waitbar(1);	end;
 			delimE=	delimE(delimS > 0);

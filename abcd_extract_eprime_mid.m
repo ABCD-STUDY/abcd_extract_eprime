@@ -19,8 +19,18 @@ function [eprime_nruns,eprime_runs,errcode,behav,errmsg] = abcd_extract_eprime_m
 %     {default = 500}
 %   'minfrac': minimum fraction of a TR to register an event
 %     {default = 0.5}
-%   'nskipTRs': number of TRs to remove from beginning of time course
-%     {default = 0}
+%   'nskipTRs': number of dummy TRs before the first retained frame; sets
+%     start_time after a single trigger (the timing files are relative to
+%     start_time and are not trimmed)
+%     {default = []: 0 for a behavioral-only experiment (detected from
+%      ExperimentName); else computed from Manufacturer/SoftwareVersion
+%      via cmig_set_abcd_skipTRs() if given; else 0 with a warning}
+%   'Manufacturer': DICOM/BIDS Manufacturer field, used to compute
+%     nskipTRs when nskipTRs is [] (ignored otherwise)
+%     {default = []}
+%   'SoftwareVersion': DICOM SoftwareVersion(s) field, used to compute
+%     nskipTRs when nskipTRs is [] (ignored otherwise)
+%     {default = []}
 %   'forceflag': [0|1] overwrite existing output
 %     {default = 0}
 %   'timing_files_flag': [0|1] generate timing files
@@ -46,7 +56,13 @@ function [eprime_nruns,eprime_runs,errcode,behav,errmsg] = abcd_extract_eprime_m
 % Prev Mod: 03/20/24 by Tyler Berkness
 % Prev Mod: 04/05/24 by Don Hagler
 % Prev Mod: 06/14/24 by Don Hagler
-% Last Mod: 06/25/24 by Don Hagler
+% Prev Mod: 06/25/24 by Don Hagler
+% Prev Mod: 07/02/26 by Don Hagler
+% Prev Mod: 07/27/26 by Don Hagler
+% Prev Mod: 07/29/26 by Don Hagler
+% Prev Mod: 07/30/26 by Don Hagler
+% Prev Mod: 07/31/26 by Don Hagler
+% Last Mod: 10/05/26 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -69,10 +85,10 @@ parms = check_input(fname,varargin);
 mmil_mkdir(parms.outdir);
 
 % create struct with info for each event
-[event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms);  
+[event_info,start_time,all_types,errcode,errmsg,parms] = get_event_info(parms);
 if errcode, return; end;
 
-% check for no responses 
+% check for no responses
 [nresp, errcode, errmsg] = check_no_responses(event_info,parms);
 if errcode, return; end;
         
@@ -106,10 +122,12 @@ if parms.timing_files_flag && eprime_nruns
           offset = {event_info(ind_type(ind_keep)).feedback_offset};
           % get resp_times
           resp_times = get_rt(event_info(ind_type(ind_keep)),1);
+          % raw run, same source as behavioral counting (not a timestamp guess)
+          run = [event_info(ind_type(ind_keep)).run];
           % check events
-          [onset,offset,resp_times] = check_offsets(onset,offset,resp_times,eventname,parms);
-          % find most recent start time for each event
-          [ind_start,event_ref_time] = set_ref(onset,start_time);
+          [onset,offset,resp_times,run] = check_offsets(onset,offset,resp_times,run,eventname,parms);
+          % assign each event to its own (raw Block) run's timing files
+          [ind_start,event_ref_time] = assign_run(run,start_time);
           % create files for each scan
           write_files(eventname,onset,offset,resp_times,ind_start,event_ref_time,parms)
         case 'neg_feedback'
@@ -122,12 +140,14 @@ if parms.timing_files_flag && eprime_nruns
           offset = {event_info(ind_type(ind_keep)).feedback_offset};
           % get resp_times
           resp_times = get_rt(event_info(ind_type(ind_keep)),1);
+          % raw run, same source as behavioral counting (not a timestamp guess)
+          run = [event_info(ind_type(ind_keep)).run];
           % check offsets match onsets
-          [onset,offset,resp_times] = check_offsets(onset,offset,resp_times,eventname,parms);
-          % find most recent start time for each event
-          [ind_start,event_ref_time] = set_ref(onset,start_time);
+          [onset,offset,resp_times,run] = check_offsets(onset,offset,resp_times,run,eventname,parms);
+          % assign each event to its own (raw Block) run's timing files
+          [ind_start,event_ref_time] = assign_run(run,start_time);
           % create files for each scan
-          write_files(eventname,onset,offset,resp_times,ind_start,event_ref_time,parms)    
+          write_files(eventname,onset,offset,resp_times,ind_start,event_ref_time,parms)
 
         %% todo: case probe?
         %% todo: get resp_times for probe?
@@ -135,18 +155,20 @@ if parms.timing_files_flag && eprime_nruns
         otherwise % anticipation
           ind_keep = [1:length(ind_type)];
           % start of anticipation event set to cue onset
-          onset = {event_info(ind_type(ind_keep)).cue_onset}; 
+          onset = {event_info(ind_type(ind_keep)).cue_onset};
           % start of anticipation event set to probe offset
-          offset = {event_info(ind_type(ind_keep)).probe_offset}; 
+          offset = {event_info(ind_type(ind_keep)).probe_offset};
           % get resp_times
           resp_times = get_rt(event_info(ind_type(ind_keep)),1);
+          % raw run, same source as behavioral counting (not a timestamp guess)
+          run = [event_info(ind_type(ind_keep)).run];
           % check offsets match onsets
-          [onset,offset,resp_times] = check_offsets(onset,offset,resp_times,eventname,parms);
-          % find most recent start time for each event
-          [ind_start,event_ref_time] = set_ref(onset,start_time); 
+          [onset,offset,resp_times,run] = check_offsets(onset,offset,resp_times,run,eventname,parms);
+          % assign each event to its own (raw Block) run's timing files
+          [ind_start,event_ref_time] = assign_run(run,start_time);
           % create files for each scan
-          write_files(eventname,onset,offset,resp_times,ind_start,event_ref_time,parms)    
-      end 
+          write_files(eventname,onset,offset,resp_times,ind_start,event_ref_time,parms)
+      end
     end
   end
 end
@@ -164,7 +186,9 @@ function parms = check_input(fname,options)
     'TR',0.8,[],...
     'numTRs',500,[],...
     'minfrac',0.5,[0,1],...
-    'nskipTRs',0,[],...
+    'nskipTRs',[],[],...
+    'Manufacturer',[],[],...
+    'SoftwareVersion',[],[],...
     'forceflag',false,[false true],...
     'timing_files_flag',true,[false true],...
     'verbose',true,[false true],...
@@ -219,28 +243,36 @@ function parms = check_input(fname,options)
   if isempty(parms.outstem)
     parms.outstem = abcd_clean_fstem(fstem);
   end;
-  % calculate time at the end of each TR
-  parms.TR_offset = linspace(parms.TR,parms.numTRs * parms.TR,parms.numTRs);
-  parms.TR_onset = parms.TR_offset - parms.TR;
+  % calculate time at the start/end of each TR. Direct multiplication
+  % (0:numTRs-1)*TR, not linspace(TR,numTRs*TR,numTRs) -- linspace's
+  % formula introduces a ~1 ULP rounding difference per grid point
+  % relative to k*TR, which occasionally flips the strict '<'/'>'
+  % TR-mask comparison right at a trial-onset tie exactly on a TR
+  % boundary. Python's grid already used direct multiplication; matching
+  % it here removes the discrepancy. See TODO.txt item 1b /
+  % SST_matlab_changes.txt for full detail.
+  parms.TR_onset  = (0:parms.numTRs-1) * parms.TR;
+  parms.TR_offset = parms.TR_onset + parms.TR;
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [ind_start,event_ref_time] = set_ref(onset,start_time)
-  if ~isempty(onset)
-    d = bsxfun(@minus,onset,start_time');
-    d(d<0) = Inf;
-    [d,ind_start] = min(d,[],1);
-    event_ref_time  = start_time(ind_start);
+function [ind_start,event_ref_time] = assign_run(run,start_time)
+  % uses each event's own raw run number directly, instead of picking
+  % the nearest-preceding start_time (which could silently move an event
+  % into a different run's timing files)
+  if ~isempty(run)
+    ind_start = run;
+    event_ref_time = start_time(run);
   else
-    ind_start = start_time;
-    event_ref_time = 0;
+    ind_start = [];
+    event_ref_time = [];
   end;
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [onset,offset,resp_times] = check_offsets(onset,offset,resp_times,eventname,parms)
+function [onset,offset,resp_times,run] = check_offsets(onset,offset,resp_times,run,eventname,parms)
   ind_empty = find(cellfun(@isempty,onset) | cellfun(@isempty,offset));
   if ~isempty(ind_empty)
     if parms.verbose
@@ -252,6 +284,7 @@ function [onset,offset,resp_times] = check_offsets(onset,offset,resp_times,event
     onset = onset(ind_keep);
     offset = offset(ind_keep);
     resp_times = resp_times(ind_keep);
+    run = run(ind_keep);
   end;
   onset = cell2mat(onset);
   offset = cell2mat(offset);
@@ -295,16 +328,14 @@ function write_files(eventname,onset,offset,resp_times,ind_start,event_ref_time,
                          rel_offset(k)>(parms.TR_onset+parms.mindur));
           TR_mask(ind_rep) = 1;
         end;
-        % calculate event times from TR_onset
-        event_times = parms.TR_onset(find(TR_mask));
+        % no TRs removed: rel_onset is from start_time, already the first
+        %   retained frame (nskipTRs x TR after a single trigger), so the
+        %   grid starts there; trimming nskipTRs more (as from 07/31/26)
+        %   put the .1D and .txt nskipTRs TRs early
+        % calculate event times from TR_onset (0-based from start_time)
+        event_times = (find(TR_mask)-1)*parms.TR;
         % convert time units to multiples of TRs
         event_TRs = event_times/parms.TR;
-        % remove  nskipTRs
-        if parms.nskipTRs>0
-          TR_mask = TR_mask(parms.nskipTRs+1:end);
-          event_times = event_times(parms.nskipTRs+1:end) - parms.nskipTRs*parms.TR;
-          event_TRs = event_times/parms.TR; 
-        end;
         % write to 1D file
         fid = fopen(fname_1D,'wt');
         if fid<0, error('failed to open %s for writing',fname_1D); end;
@@ -379,8 +410,8 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms)
-  
+function [event_info,start_time,all_types,errcode,errmsg,parms] = get_event_info(parms)
+
   event_info=[]; start_time=[]; all_types=[];
   errcode = 0; errmsg = [];
 
@@ -423,7 +454,31 @@ function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms
     expected_start_delay = parms.expected_start_delay_Siemens*[1,1];
     expected_init_delay = parms.expected_init_delay_Siemens*[1,1];
   end
-  
+
+  % resolve nskipTRs=[]: 0 for a behavioral-only experiment; else computed
+  % from Manufacturer/SoftwareVersion if given; else 0 with a warning.
+  % Missing imaging data is not special-cased -- it isn't behavioral, so it
+  % takes this same path. Resolved here (not in the caller) so it's
+  % available below for the single-trigger start_time formula.
+  if isempty(parms.nskipTRs)
+    if behav_flag
+      parms.nskipTRs = 0;
+    elseif ~isempty(parms.Manufacturer) || ~isempty(parms.SoftwareVersion)
+      % cmig_set_abcd_skipTRs() expects char fields -- an unsupplied
+      % Manufacturer/SoftwareVersion is [] (empty double) here, not ''
+      manufacturer = parms.Manufacturer; if isempty(manufacturer), manufacturer = ''; end
+      software_version = parms.SoftwareVersion; if isempty(software_version), software_version = ''; end
+      scan_info = struct('Manufacturer',manufacturer,...
+                          'SoftwareVersions',software_version);
+      parms.nskipTRs = cmig_set_abcd_skipTRs(scan_info);
+    else
+      parms.nskipTRs = 0;
+      if parms.verbose
+        fprintf('%s: WARNING: nskipTRs not supplied and no Manufacturer/SoftwareVersion given -- defaulting nskipTRs=0\n',mfilename);
+      end
+    end
+  end
+
   % get trigger and start times
   trig_time = []; start_time = [];
   if isfield(event_info,'getready_rttime')
@@ -446,9 +501,10 @@ function [event_info,start_time,all_types,errcode,errmsg] = get_event_info(parms
       ind_trig_last = ind_trig(find([diff(ind_trig),100]>1));
       start_time = [event_info(ind_trig_last).getready_rttime];
     else
-      % NOTE: for Siemens/Philips, only one trigger is sent/recorded
-      %       set start_time relative to trigger with the standard start delay for Siemens/Philips
-      start_time = trig_time + 1000*parms.start_delay_Siemens;
+      % NOTE: for single-trigger files, use nskipTRs*TR instead of the
+      %       fixed start_delay_Siemens constant (numerically the same
+      %       for genuine Siemens/Philips hardware)
+      start_time = trig_time + 1000*parms.nskipTRs*parms.TR;
     end
     % exclude zeros
     start_time = nonzeros(start_time)';
@@ -878,29 +934,20 @@ function [behav,runs_ok,errcode,errmsg] = get_behav_feedback(event_info,start_ti
           end;
  
           for j=1:2 % runs
-            type_counts_run = sprintf('%s_run_%d_numtrials',eventname,j);  
-            behav.(type_counts_run) = NaN; 
+            type_counts_run = sprintf('%s_run_%d_numtrials',eventname,j);
+            behav.(type_counts_run) = NaN;
             type_acc_run = sprintf('%s_run_%d_rate',eventname,j);
             behav.(type_acc_run) = NaN;
-            type_rt_run = sprintf('%s_run_%d_mean_rt',eventname,j);    
-            if fbflag
-              rt_keep = get_rt(event_info(ind_type_run));
-              behav.(type_rt_run) = mean(rt_keep);
-            else
-              behav.(type_rt_run) = NaN;
-            end
+            type_rt_run = sprintf('%s_run_%d_mean_rt',eventname,j);
+            behav.(type_rt_run) = NaN;
             type_rt_run = sprintf('%s_run_%d_std_rt',eventname,j);
-            if fbflag
-              behav.(type_rt_run) = std(rt_keep);
-            else
-              behav.(type_rt_run) = NaN;
-            end
+            behav.(type_rt_run) = NaN;
           end
           for j=runs_ok
-            type_counts_run = sprintf('%s_run_%d_numtrials',eventname,j); 
-            ind_type_run = [intersect(find(runs==j),ind_type)];  
-            ind_keep_run = [intersect(find(runs==j),ind_type(ind_keep))];    
-            behav.(type_counts_run) = length(ind_keep_run); 
+            type_counts_run = sprintf('%s_run_%d_numtrials',eventname,j);
+            ind_type_run = [intersect(find(runs==j),ind_type)];
+            ind_keep_run = [intersect(find(runs==j),ind_type(ind_keep))];
+            behav.(type_counts_run) = length(ind_keep_run);
             type_acc_run = sprintf('%s_run_%d_rate',eventname,j);
             behav.(type_acc_run) = length(ind_keep_run)./length(ind_type_run);
             type_rt_run = sprintf('%s_run_%d_mean_rt',eventname,j);

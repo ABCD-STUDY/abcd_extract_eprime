@@ -19,14 +19,34 @@ function [eprime_nruns,eprime_runs,errcode,behav,errmsg] = abcd_extract_eprime_s
 %     {default = 500}
 %   'minfrac': minimum fraction of a TR to register an event
 %     {default = 0.5}
-%   'nskipTRs': number of TRs to remove from beginning of time course
-%     {default = 0}
+%   'nskipTRs': number of dummy TRs before the first retained frame; sets
+%     start_time after a single trigger (the timing files are relative to
+%     start_time and are not trimmed)
+%     {default = []: 0 for a behavioral-only experiment (detected from
+%      ExperimentName); else computed from Manufacturer/SoftwareVersion
+%      via cmig_set_abcd_skipTRs() if given; else 0 with a warning}
+%   'Manufacturer': DICOM/BIDS Manufacturer field, used to compute
+%     nskipTRs when nskipTRs is [] (ignored otherwise)
+%     {default = []}
+%   'SoftwareVersion': DICOM SoftwareVersion(s) field, used to compute
+%     nskipTRs when nskipTRs is [] (ignored otherwise)
+%     {default = []}
 %   'switch_thresh': percent correct below which to swap button assignements
 %     {default = 0.3}
+%   'min_valid_trials': minimum number of trials with both a response and a
+%     correct-response value before a button-switch decision is attempted;
+%     below this, the accuracy estimate is too noisy to act on and no
+%     switch is attempted
+%     {default = 10}
 %   'forceflag': [0|1] overwrite existing output
 %     {default = 0}
 %   'timing_files_flag': [0|1] generate timing files
 %     {default = 1}
+%   'ste_recode_flag': [] auto-detect from SST experiment version (true
+%     if the first digit is >=2, else false); or explicit true/false to
+%     override the auto-detected value unconditionally (e.g. to compare
+%     both interpretations for the same session)
+%     {default = []}
 %   'verbose': [0|1] display messages
 %     {default = 1}
 %
@@ -50,7 +70,18 @@ function [eprime_nruns,eprime_runs,errcode,behav,errmsg] = abcd_extract_eprime_s
 % Prev Mod: 08/19/25 by Bader Chaarani
 % Prev Mod: 08/21/25 by Don Hagler
 % Prev Mod: 09/15/25 by Don Hagler
-% Last Mod: 09/18/25 by Don Hagler
+% Prev Mod: 06/29/26 by Don Hagler
+% Prev Mod: 07/06/26 by Don Hagler
+% Prev Mod: 07/08/26 by Don Hagler
+% Prev Mod: 07/23/26 by Don Hagler
+% Prev Mod: 07/24/26 by Don Hagler
+% Prev Mod: 07/27/26 by Don Hagler
+% Prev Mod: 07/28/26 by Don Hagler
+% Prev Mod: 07/29/26 by Don Hagler
+% Prev Mod: 07/30/26 by Don Hagler
+% Prev Mod: 07/31/26 by Don Hagler
+% Prev Mod: 10/05/26 by Don Hagler
+% Last Mod: 10/21/26 by Don Hagler
 %
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -77,10 +108,23 @@ parms = check_input(fname,varargin);
 mmil_mkdir(parms.outdir);
 
 % create structure with info for each event
-[event_info,start_time,errcode,errmsg] = get_event_info(parms);  
+[event_info,start_time,errcode,errmsg,parms] = get_event_info(parms);
 if errcode, return; end;
 
-% check for no responses 
+% auto-detect ste_recode_flag from SST experiment version if not
+% explicitly specified (true if the first digit is >=2, else false)
+if isempty(parms.ste_recode_flag)
+  version_str = mmil_getfield(event_info(1),'version','');
+  version_parts = regexp(version_str,'\.','split');
+  if ~isempty(version_parts) && ~isnan(str2double(version_parts{1})) && ...
+      str2double(version_parts{1})>=2
+    parms.ste_recode_flag = true;
+  else
+    parms.ste_recode_flag = false;
+  end
+end
+
+% check for no responses
 [nresp, errcode, errmsg] = check_no_responses(event_info,parms);
 if errcode, return; end;
         
@@ -103,42 +147,78 @@ eprime_nruns = length(eprime_runs);
 parms.eprime_nruns = eprime_nruns; 
 if parms.verbose, fprintf('%s: number of e-prime runs = %d \n',mfilename,eprime_nruns); end
 
+% when STE trials are kept as a nuisance condition rather than recoded
+% as Go, give them a real timing condition instead of no representation
+% at all (see revise_sst_types's ste_recode_flag=false branch). Appended
+% here, after get_behavioral_data() has already run, so it does not also
+% pick up early_stop/STE and duplicate/collide with the dedicated
+% STE_counts_total/STE_percent_total fields get_behavioral_data() already
+% computes directly from ssd_dur/ssd_rt.
+if ~parms.ste_recode_flag
+  parms.condnames{end+1} = 'early_stop';
+  parms.typenames{end+1} = 'STE';
+end
+% zero-SSD stop trials with an SSD-window response (ZeroSSDResp), neither go
+%   nor stop, are a nuisance condition like early_stop; appended here for the
+%   same reason (counted by get_behavioral_data() as ZeroSSDResp_counts)
+parms.condnames{end+1} = 'zero_ssd_response';
+parms.typenames{end+1} = 'ZeroSSDResp';
+parms.nconds = length(parms.condnames);
+parms.ntypes = length(parms.typenames);
+
 if parms.timing_files_flag && eprime_nruns
   % create files for each condition
   for i=1:parms.nconds
     type  = parms.typenames{i};
-    cond  = parms.condnames{i}; 
-    pat = '\w_(?<event>\w+)'; 
-    k = regexp(cond,pat,'names');
-    eventname = k.event;
+    cond  = parms.condnames{i};
 
     % find all instances of current type of event
     ind_type = find(strcmp(type,{event_info.type}));
-    
-    switch eventname
-      case 'go'
-        parms.mindur = 0.08;
-        % get onset
-        onset = {event_info(ind_type).('go_onset_time')};
-        % get offset
-        offset = {event_info(ind_type).('go_offset_time')};
-        % get resp_times
-        resp_times = {event_info(ind_type).('go_rt_adjusted')};
-        % check offsets match onsets
-        [onset,offset,resp_times] = check_offsets(onset,offset,resp_times,eventname,parms);
-      case 'stop'
-        parms.mindur = 0;  
-        % get onset
-        onset = [event_info(ind_type).('stop_start_time')];
-        % set offset
-        offset = onset+20;
-        % get resp_times
-        resp_times = [event_info(ind_type).('stop_rt_adjusted')];
+    % raw run, same source as behavioral counting (not a timestamp guess)
+    run = [event_info(ind_type).run];
+
+    if ismember(cond,{'early_stop','zero_ssd_response'})
+      % STE trials kept as a nuisance condition (ste_recode_flag=false),
+      % and ZeroSSDResp trials; 'early_stop' would otherwise regex-extract
+      % eventname='stop' below and collide with correct_stop/incorrect_stop's
+      % own logic
+      parms.mindur = 0.08;
+      % get onset
+      onset = [event_info(ind_type).('stop_onset_time')];
+      % set offset from the full event span (see revise_sst_types)
+      offset = onset + [event_info(ind_type).('ste_dur')];
+      % get resp_times: response occurred during the SSD window
+      resp_times = [event_info(ind_type).('ssd_rt')];
+    else
+      pat = '\w_(?<event>\w+)';
+      k = regexp(cond,pat,'names');
+      eventname = k.event;
+
+      switch eventname
+        case 'go'
+          parms.mindur = 0.08;
+          % get onset
+          onset = {event_info(ind_type).('go_onset_time')};
+          % get offset
+          offset = {event_info(ind_type).('go_offset_time')};
+          % get resp_times
+          resp_times = {event_info(ind_type).('go_rt_adjusted')};
+          % check offsets match onsets
+          [onset,offset,resp_times,run] = check_offsets(onset,offset,resp_times,run,eventname,parms);
+        case 'stop'
+          parms.mindur = 0;
+          % get onset
+          onset = [event_info(ind_type).('stop_start_time')];
+          % set offset
+          offset = onset+20;
+          % get resp_times
+          resp_times = [event_info(ind_type).('stop_rt_adjusted')];
+      end
     end
-    % find most recent start time for each event
-    [ind_start,event_ref_time] = set_ref(onset,start_time);  
+    % assign each event to its own (raw run) run's timing files
+    [ind_start,event_ref_time] = assign_run(run,start_time);
     % create files for each scan
-    write_files(cond,onset,offset,resp_times,ind_start,event_ref_time,parms); 
+    write_files(cond,onset,offset,resp_times,ind_start,event_ref_time,parms);
   end 
 end; %timing_files_flag
 
@@ -155,13 +235,17 @@ function parms = check_input(fname,options)
     'TR',0.8,[],...
     'numTRs',500,[],...
     'minfrac',0.5,[0,1],...
-    'nskipTRs',0,[],...
+    'nskipTRs',[],[],...
+    'Manufacturer',[],[],...
+    'SoftwareVersion',[],[],...
     'switch_thresh',0.3,[0,0.5],...
+    'min_valid_trials',10,[],...
     'forceflag',false,[false true],...
     'timing_files_flag',true,[false true],...
     'verbose',true,[false true],...
+    'ste_recode_flag',[],[],...
     ...
-    'eprime_runs',1:2,[],...   
+    'eprime_runs',1:2,[],...
     'eprime_nruns',0,0:2,...
     'expected_numtrials',182,[],...
     'expected_start_delay_GE',12,[],...
@@ -186,10 +270,10 @@ function parms = check_input(fname,options)
                   'stop_dur','ssd_rt','go_onset_time','go_offset_time' , 'go_acc','go_resp',...
                   'fix_resp', 'ssd_onset_time','stop_start_time','ssd_offset_time','stop_acc','go_cresp',...
                   'stop_onset_time','stop_offset_time','stop_resp', 'ssd_acc', 'type', 'ssd_resp', 'stimulus' },[],...
-    'typenames',{'CorrectGo', 'CorrectLateGo', 'IncorrectGo', 'IncorrectLateGo','NoRespGo',... 
-                 'CorrectStop', 'IncorrectStop','SSDStop'},[],...
+    'typenames',{'CorrectGo', 'CorrectLateGo', 'IncorrectGo', 'IncorrectLateGo','NoRespGo',...
+                 'CorrectStop', 'IncorrectStop'},[],...
     'condnames',{'correct_go','correctlate_go', 'incorrect_go', 'incorrectlate_go' ...
-                  'noresp_go', 'correct_stop', 'incorrect_stop','ssd_stop'},[],...
+                  'noresp_go', 'correct_stop', 'incorrect_stop'},[],...
   });
 
   % check conditions
@@ -208,15 +292,24 @@ function parms = check_input(fname,options)
   if isempty(parms.outstem)
     parms.outstem = abcd_clean_fstem(fstem);
   end;
-  % compute time at the end of each TR
-  parms.TR_offset = linspace(parms.TR,parms.numTRs * parms.TR,parms.numTRs);
-  parms.TR_onset  = parms.TR_offset - parms.TR;
+  % compute time at the start/end of each TR. Direct multiplication
+  % (0:numTRs-1)*TR, not linspace(TR,numTRs*TR,numTRs) -- linspace's
+  % formula introduces a ~1 ULP rounding difference per grid point
+  % relative to k*TR (confirmed: at k=302, TR=0.8, linspace gives
+  % 241.59999999999999, direct multiplication gives 241.60000000000002),
+  % which occasionally flips the strict '<'/'>' TR-mask comparison right
+  % at a trial-onset tie exactly on a TR boundary -- common since MID/
+  % SST/NBACK trial timing is often designed to land there. Python's
+  % grid (np.arange(numTRs)*TR + TR) already used direct multiplication;
+  % matching it here removes the discrepancy.
+  parms.TR_onset  = (0:parms.numTRs-1) * parms.TR;
+  parms.TR_offset = parms.TR_onset + parms.TR;
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [event_info,start_time,errcode,errmsg] = get_event_info(parms)
-  
+function [event_info,start_time,errcode,errmsg,parms] = get_event_info(parms)
+
   event_info=[]; start_time=[]; errcode = 0; errmsg = [];
   
   try 
@@ -262,7 +355,31 @@ function [event_info,start_time,errcode,errmsg] = get_event_info(parms)
     expected_start_delay = parms.expected_start_delay_Siemens*[1,1];
     expected_init_delay = parms.expected_init_delay_Siemens*[1,1];
   end
-  
+
+  % resolve nskipTRs=[]: 0 for a behavioral-only experiment; else computed
+  % from Manufacturer/SoftwareVersion if given; else 0 with a warning.
+  % Missing imaging data is not special-cased -- it isn't behavioral, so it
+  % takes this same path. Resolved here (not in the caller) so it's
+  % available below for the single-trigger start_time formula.
+  if isempty(parms.nskipTRs)
+    if behav_flag
+      parms.nskipTRs = 0;
+    elseif ~isempty(parms.Manufacturer) || ~isempty(parms.SoftwareVersion)
+      % cmig_set_abcd_skipTRs() expects char fields -- an unsupplied
+      % Manufacturer/SoftwareVersion is [] (empty double) here, not ''
+      manufacturer = parms.Manufacturer; if isempty(manufacturer), manufacturer = ''; end
+      software_version = parms.SoftwareVersion; if isempty(software_version), software_version = ''; end
+      scan_info = struct('Manufacturer',manufacturer,...
+                          'SoftwareVersions',software_version);
+      parms.nskipTRs = cmig_set_abcd_skipTRs(scan_info);
+    else
+      parms.nskipTRs = 0;
+      if parms.verbose
+        fprintf('%s: WARNING: nskipTRs not supplied and no Manufacturer/SoftwareVersion given -- defaulting nskipTRs=0\n',mfilename);
+      end
+    end
+  end
+
   % get trigger and start times
   trig_time = []; start_time = [];
   if isfield(event_info,'getready_rttime') % GE
@@ -301,9 +418,10 @@ function [event_info,start_time,errcode,errmsg] = get_event_info(parms)
       %       set start_time to trigger
       start_time = trig_time;
     else
-      % NOTE: for Siemens/Philips, only one trigger is sent/recorded
-      %       set start_time relative to trigger with the standard start delay for Siemens/Philips
-      start_time = trig_time + 1000*parms.start_delay_Siemens;
+      % NOTE: for single-trigger files, use nskipTRs*TR instead of the
+      %       fixed start_delay_Siemens constant (numerically the same
+      %       for genuine Siemens/Philips hardware)
+      start_time = trig_time + 1000*parms.nskipTRs*parms.TR;
     end
   end
 
@@ -416,41 +534,12 @@ function [event_info,start_time,errcode,errmsg] = get_event_info(parms)
       fprintf('%s: WARNING: replacing go_resp strings with numeric\n', mfilename);
     end;
     for i=1:length(event_info)
-      % assign numbers to each go_resp
-      tmp_go_resp = go_resp{i};
-      if isstr(tmp_go_resp)
-        k = find(strcmp(tmp_go_resp,uniq_go_cresp_names));
-        tmp_go_resp = uniq_go_cresp_nums(k);
-      end;
-      event_info(i).go_resp = tmp_go_resp;
-      % assign numbers to each fix_resp
-      tmp_fix_resp = fix_resp{i};
-      if isstr(tmp_fix_resp)
-        k = find(strcmp(tmp_fix_resp,uniq_go_cresp_names));
-        tmp_fix_resp = uniq_go_cresp_nums(k);
-      end;
-      event_info(i).fix_resp = tmp_fix_resp;
-      % assign numbers to each stop_resp
-      tmp_stop_resp = stop_resp{i};
-      if isstr(tmp_stop_resp)
-        k = find(strcmp(tmp_stop_resp,uniq_go_cresp_names));
-        tmp_stop_resp = uniq_go_cresp_nums(k);
-      end;
-      event_info(i).stop_resp = tmp_stop_resp;
-      % assign numbers to each ssd_resp
-      tmp_ssd_resp = ssd_resp{i};
-      if isstr(tmp_ssd_resp)
-        k = find(strcmp(tmp_ssd_resp,uniq_go_cresp_names));
-        tmp_ssd_resp = uniq_go_cresp_nums(k);
-      end;
-      event_info(i).ssd_resp = tmp_ssd_resp;
-      % assign numbers to each go_cresp
-      tmp_go_cresp = go_cresp{i};
-      if isstr(tmp_go_cresp)
-        k = find(strcmp(tmp_go_cresp,uniq_go_cresp_names));
-        tmp_go_cresp = uniq_go_cresp_nums(k);
-      end;
-      event_info(i).go_cresp = tmp_go_cresp;
+      % assign numbers to each go_resp/fix_resp/stop_resp/ssd_resp/go_cresp
+      event_info(i).go_resp = resolve_resp_value(go_resp{i},uniq_go_cresp_names,uniq_go_cresp_nums);
+      event_info(i).fix_resp = resolve_resp_value(fix_resp{i},uniq_go_cresp_names,uniq_go_cresp_nums);
+      event_info(i).stop_resp = resolve_resp_value(stop_resp{i},uniq_go_cresp_names,uniq_go_cresp_nums);
+      event_info(i).ssd_resp = resolve_resp_value(ssd_resp{i},uniq_go_cresp_names,uniq_go_cresp_nums);
+      event_info(i).go_cresp = resolve_resp_value(go_cresp{i},uniq_go_cresp_names,uniq_go_cresp_nums);
     end
   end
   
@@ -466,6 +555,27 @@ function vals = replace_cells(vals)
     ind_cell = find(cellfun(@iscell,vals));
     vals(ind_cell) = cellfun(@(x) x{1},vals(ind_cell),'UniformOutput',false);
   end
+return;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+function val = resolve_resp_value(val,uniq_go_cresp_names,uniq_go_cresp_nums)
+  if ~isstr(val), return; end
+  % try extracting an embedded digit directly, via the SAME regex used to
+  % build uniq_go_cresp_nums/names, applied to the value itself -- handles
+  % a self-referential value already in 'N,{NAME}'/'N{NAME}' format (e.g.
+  % go_cresp when Go.RESP is plain numeric but Go.CRESP is 'N,{NAME}');
+  % such a value is never bracket-unwrapped upstream, so it never matches
+  % a bare name via strcmp below
+  k = regexp(val,'(?<num>\d+),?{(?<name>\w+)}','names');
+  if ~isempty(k)
+    val = str2num(k.num);
+    return;
+  end
+  % fall back to name lookup (bare {NAME} unwrapped upstream, r/g/b/y, or
+  % bare LEFTARROW/RIGHTARROW)
+  k = find(strcmp(val,uniq_go_cresp_names));
+  val = uniq_go_cresp_nums(k);
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -507,18 +617,28 @@ return;
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
 function [event_info,switch_flag,errcode,errmsg] = sst_switch(event_info,parms)
-  [switch_flag,acc1,errcode,errmsg] = sst_switch_flag(event_info,parms); 
+  [switch_flag,acc1,errcode,errmsg] = sst_switch_flag(event_info,parms);
   if errcode, return; end;
- 
-  if switch_flag 
-    event_info = sst_switch_event(event_info);
-    [~,acc2,~] = sst_switch_flag(event_info,parms);
-    if acc2 < acc1
-      event_info = sst_switch_event(event_info);
-      switch_flag = 0; 
-    end 
+
+  if switch_flag
+    codes = derive_switch_codes({event_info.go_cresp});
+    if isempty(codes)
+      if parms.verbose
+        fprintf('%s: go_cresp does not yield a unique response-code pair, skipping switch\n',mfilename);
+      end
+      switch_flag = 0;
+    else
+      event_info = sst_switch_event(event_info,codes);
+      [~,acc2,~] = sst_switch_flag(event_info,parms);
+      if acc2 <= acc1
+        event_info = sst_switch_event(event_info,codes);
+        switch_flag = 0;
+      elseif ~isequal(codes,[1 2]) && parms.verbose
+        fprintf('%s: switched using derived codes %g<->%g\n',mfilename,codes(1),codes(2));
+      end
+    end
   end
- 
+
   % write to csv
   if switch_flag 
     fname_csv_out  = sprintf('%s/%s_events_switched.csv',...
@@ -531,35 +651,71 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
-function event_info = sst_switch_event(event_info)
+function event_info = sst_switch_event(event_info,codes)
   for i=1:length(event_info)
-    event_info(i).go_resp = switch_val(event_info(i).go_resp);
-    event_info(i).fix_resp = switch_val(event_info(i).fix_resp);
-    event_info(i).stop_resp = switch_val(event_info(i).stop_resp);
-    event_info(i).ssd_resp = switch_val(event_info(i).ssd_resp);
+    event_info(i).go_resp = switch_val(event_info(i).go_resp,codes);
+    event_info(i).fix_resp = switch_val(event_info(i).fix_resp,codes);
+    event_info(i).stop_resp = switch_val(event_info(i).stop_resp,codes);
+    event_info(i).ssd_resp = switch_val(event_info(i).ssd_resp,codes);
   end
   event_info = sst_acc(event_info);
 return;
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function val = switch_val(val)
-  if val==1
-    val=2;
-  elseif val==2
-    val=1;
+function val = switch_val(val,codes)
+  if val==codes(1)
+    val=codes(2);
+  elseif val==codes(2)
+    val=codes(1);
   end;
+return;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+function codes = derive_switch_codes(cresp_cell)
+  % Derive the two response codes to flip from the correct-response
+  % field's own unique values (device/site wiring varies, e.g. some
+  % Philips sites use 3/4 instead of 1/2), rather than assuming 1/2.
+  % Returns [code_a,code_b] when exactly 2 unique non-empty values exist;
+  % [] when indeterminate (0, 1, or more than 2 values).
+  vals = cresp_cell(~cellfun(@isempty,cresp_cell));
+  uniq = unique(cell2mat(vals));
+  if numel(uniq)==2
+    codes = uniq;
+  else
+    codes = [];
+  end
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
-function [switch_flag,accuracy,errcode,errmsg] = sst_switch_flag(event_info,parms) 
+function [switch_flag,accuracy,errcode,errmsg] = sst_switch_flag(event_info,parms)
   switch_flag = 0;
   errcode = 0; errmsg = [];
-  
-  go_acc_vals = [event_info.go_acc];
-  correct_total = size(go_acc_vals,2);
-  correct = sum(go_acc_vals); 
+  accuracy = NaN;
+
+  % go_acc may retain a stale raw Go.ACC value for trials where go_resp is
+  % empty (sst_acc only overwrites go_acc when go_resp and go_cresp are
+  % both non-empty), so count trials with a real response/correct-response
+  % pair directly rather than trusting go_acc's denominator.
+  go_resp = {event_info.go_resp};
+  go_cresp = {event_info.go_cresp};
+  ind_valid = find(~cellfun(@isempty,go_resp) & ~cellfun(@isempty,go_cresp));
+  n_valid = length(ind_valid);
+  if n_valid < parms.min_valid_trials
+    if parms.verbose, fprintf('%s: only %d valid trials (< %d), skipping switch\n',...
+      mfilename,n_valid,parms.min_valid_trials); end
+    return;
+  end
+
+  correct = 0;
+  for i=ind_valid
+    if isequal(go_resp{i},go_cresp{i})
+      correct = correct+1;
+    end
+  end
+  correct_total = n_valid;
   accuracy = 100*correct/correct_total;
   if parms.verbose, fprintf('%s: accuracy = %0.1f%%\n',mfilename,accuracy); end
   
@@ -624,49 +780,82 @@ function event_info = revise_sst_types(event_info,parms)
   ssd_dur = {event_info.ssd_dur};
   stop_resp = {event_info.stop_resp};  
   fix_resp = {event_info.fix_resp};
+  ssd_resp = {event_info.ssd_resp};
   % note how many STE trials will be recoded as Go trials
   if parms.verbose
     idx_val = find(~cellfun(@isempty, ssd_rt));
     idx_nonzero = cell2mat(ssd_rt(idx_val)) > 0;
     idx_ste = idx_val(idx_nonzero);
     if ~isempty(idx_ste)
-      fprintf('%s: recoding %d STE trials as Go trials\n',mfilename,length(idx_ste));
+      if parms.ste_recode_flag
+        fprintf('%s: recoding %d STE trials as Go trials\n',mfilename,length(idx_ste));
+      else
+        fprintf('%s: labeling %d STE trials as early_stop (nuisance)\n',mfilename,length(idx_ste));
+      end
     end
   end
+  % ensure ste_dur exists as a field on every event, even when this file
+  % has zero STE or ZeroSSDResp trials -- MATLAB's dynamic field access below
+  % (event_info(ind_type).('ste_dur')) errors if the field was never
+  % assigned anywhere in the struct array, not just for the empty indices
+  [event_info.ste_dur] = deal([]);
   for i=1:size(ssd_dur,2)
-    if ssd_dur{i} > 0  % only stop trials
+    if ssd_dur{i} > 0  % non-zero SSD stop trial
       if ssd_rt{i} > 0
-        % recode Stop Too Early (STE) trial as Go trial
+        % Stop Too Early (STE): participant responded during the SSD window
+        if parms.ste_recode_flag
+          % legacy behavior: recode STE trial as Go trial
+          event_info(i).go_resp = event_info(i).ssd_resp;
+          event_info(i).go_rt = event_info(i).ssd_rt;
+          event_info(i).go_onset_time = event_info(i).ssd_onset_time;
+          %% NOTE: missing SSD.OffsetTime, so it is unclear what is correct value for this
+          event_info(i).go_offset_time = event_info(i).stop_offset_time;
+          %% NOTE: unclear what should be used for Go duration for these trials
+          event_info(i).go_dur = event_info(i).stop_dur + event_info(i).ssd_dur;
+          event_info(i).stop_dur = [];
+          % determine Go.CRESP from the stimulus image
+          stimulus_path = event_info(i).stimulus;
+          if contains(stimulus_path, 'LeftArrow')
+            event_info(i).go_cresp = 1;
+          elseif contains(stimulus_path, 'RightArrow')
+            event_info(i).go_cresp = 2;
+          end
+          % recalculate Go.ACC to determine if the Go trial is correct or incorrect
+          if event_info(i).go_resp == event_info(i).go_cresp
+            event_info(i).go_acc = 1; % Correct Go
+          else
+            event_info(i).go_acc = 0; % Incorrect Go
+          end
+          % recode the trial type to reflect the new Go status
+          if event_info(i).go_acc == 1
+             event_info(i).type = 'CorrectGo';
+          else
+             event_info(i).type = 'IncorrectGo';
+          end
+        else
+          % default: label as nuisance type; exclude from both go and stop counts
+          % preserve the full STE event span (SSD window + stop signal)
+          % before stop_dur is cleared, for early_stop's own timing files
+          event_info(i).ste_dur = event_info(i).stop_dur + event_info(i).ssd_dur;
+          event_info(i).stop_dur = [];
+          event_info(i).type = 'STE';
+        end
 
-        % set Go values
-        event_info(i).go_resp = event_info(i).ssd_resp;
-        event_info(i).go_rt = event_info(i).ssd_rt;
-        event_info(i).go_onset_time = event_info(i).ssd_onset_time;
-        %% NOTE: missing SSD.OffsetTime, so it is unclear what is correct value for this
-        event_info(i).go_offset_time = event_info(i).stop_offset_time;
-        %% NOTE: unclear what should be used for Go duration for these trials
-        event_info(i).go_dur = event_info(i).stop_dur + event_info(i).ssd_dur;
+      elseif stop_resp{i} > 0
+        event_info(i).type = 'IncorrectStop';
+      elseif fix_resp{i} > 0
+        event_info(i).type = 'IncorrectStop';
+      else
+        event_info(i).type = 'CorrectStop';
+      end
+    elseif isequal(ssd_dur{i}, 0)
+      if ~isempty(ssd_resp{i})
+        % zero-SSD trial with an SSD-window response (ZeroSSDResp): neither
+        % go nor stop; stop_dur cleared to leave it out of the stop trials,
+        % its event span kept in ste_dur for its own timing files
+        event_info(i).ste_dur = event_info(i).stop_dur + event_info(i).ssd_dur;
         event_info(i).stop_dur = [];
-        % determine Go.CRESP from the stimulus image 
-        stimulus_path = event_info(i).stimulus;
-        if contains(stimulus_path, 'LeftArrow')
-          event_info(i).go_cresp = 1; 
-        elseif contains(stimulus_path, 'RightArrow')
-          event_info(i).go_cresp = 2;
-        end
-        % recalculate Go.ACC to determine if the Go trial is correct or incorrect
-        if event_info(i).go_resp == event_info(i).go_cresp
-          event_info(i).go_acc = 1; % Correct Go
-        else
-          event_info(i).go_acc = 0; % Incorrect Go
-        end
-        % recode the trial type to reflect the new Go status
-        if event_info(i).go_acc == 1
-           event_info(i).type = 'CorrectGo';
-        else
-           event_info(i).type = 'IncorrectGo';
-        end
-        
+        event_info(i).type = 'ZeroSSDResp';
       elseif stop_resp{i} > 0
         event_info(i).type = 'IncorrectStop';
       elseif fix_resp{i} > 0
@@ -686,21 +875,22 @@ return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
-function [ind_start,event_ref_time] = set_ref(onset,start_time)
-  if ~isempty(onset)
-    d = bsxfun(@minus,onset,start_time');
-    d(d<0) = Inf;
-    [d,ind_start] = min(d,[],1); 
-    event_ref_time  = start_time(ind_start);
+function [ind_start,event_ref_time] = assign_run(run,start_time)
+  % uses each event's own raw run number directly, instead of picking
+  % the nearest-preceding start_time (which could silently move an event
+  % into a different run's timing files)
+  if ~isempty(run)
+    ind_start = run;
+    event_ref_time = start_time(run);
   else
-    ind_start = start_time;
-    event_ref_time = 0;
+    ind_start = [];
+    event_ref_time = [];
   end;
 return;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [onset,offset,resp_times] = check_offsets(onset,offset,resp_times,eventname,parms)
+function [onset,offset,resp_times,run] = check_offsets(onset,offset,resp_times,run,eventname,parms)
   ind_empty = find(cellfun(@isempty,onset) | cellfun(@isempty,offset));
   if ~isempty(ind_empty)
     if parms.verbose
@@ -712,6 +902,7 @@ function [onset,offset,resp_times] = check_offsets(onset,offset,resp_times,event
     onset = onset(ind_keep);
     offset = offset(ind_keep);
     resp_times = resp_times(ind_keep);
+    run = run(ind_keep);
   end;
   onset = cell2mat(onset);
   offset = cell2mat(offset);
@@ -755,16 +946,14 @@ function write_files(eventname,onset,offset,resp_times,ind_start,event_ref_time,
                          rel_offset(k)>(parms.TR_onset+parms.mindur));
           TR_mask(ind_rep) = 1;
         end;
-        % calculate event times from TR_onset
-        event_times = parms.TR_onset(find(TR_mask));
+        % no TRs removed: rel_onset is from start_time, already the first
+        %   retained frame (nskipTRs x TR after a single trigger), so the
+        %   grid starts there; trimming nskipTRs more (as from 07/31/26)
+        %   put the .1D and .txt nskipTRs TRs early
+        % calculate event times from TR_onset (0-based from start_time)
+        event_times = (find(TR_mask)-1)*parms.TR;
         % convert time units to multiples of TRs
         event_TRs = event_times/parms.TR;
-        % remove  nskipTRs
-        if parms.nskipTRs>0
-          TR_mask = TR_mask(parms.nskipTRs+1:end);
-          event_times = event_times(parms.nskipTRs+1:end) - parms.nskipTRs*parms.TR;
-          event_TRs = event_times/parms.TR; 
-        end;
         % write to 1D file
         fid = fopen(fname_1D,'wt');
         if fid<0, error('failed to open %s for writing',fname_1D); end;
@@ -891,8 +1080,14 @@ function [behav,runs_ok,event_info,errcode,errmsg] = get_behavioral_data(event_i
    errcode = 1;
    errmsg = 'no valid e-prime runs';
    return;
-  end  
-  behav.nruns = nruns; 
+  end
+  behav.nruns = nruns;
+
+  % store raw run assignment on event_info so timing-file writing below
+  % can reuse this same value directly
+  for k=1:length(event_info)
+    event_info(k).run = runs(k);
+  end
 
   % event durations
   go_dur = {event_info.go_dur}; 
@@ -901,10 +1096,14 @@ function [behav,runs_ok,event_info,errcode,errmsg] = get_behavioral_data(event_i
   stop_dur = {event_info.stop_dur}; 
   go_event_ind = find(~cellfun(@isempty,go_dur));
   stop_event_ind = find(~cellfun(@isempty,stop_dur));
+  % other trials, neither go nor stop: STE (when not recoded as Go) and
+  %   ZeroSSDResp
+  other_event_ind = find(ismember({event_info.type},{'STE','ZeroSSDResp'}));
   % total numbers of trials    
   behav.('Go_total') = size(go_event_ind,2);
   behav.('Stop_total') = size(stop_event_ind,2);
-  behav.('Total') = size(go_event_ind,2)+size(stop_event_ind,2);
+  behav.('Total') = size(go_event_ind,2)+size(stop_event_ind,2)+...
+    size(other_event_ind,2);
   
   % number of trials per run
   for j=1:2 %runs 
@@ -914,16 +1113,23 @@ function [behav,runs_ok,event_info,errcode,errmsg] = get_behavioral_data(event_i
     % stop
     type_counts_run_stop = sprintf('Stop_total_run_%d',j);
     behav.(type_counts_run_stop) = 'NaN';  
+    % all
+    behav.(sprintf('Total_run_%d',j)) = 'NaN';
   end
   for j=runs_ok %runs 
     % go
     type_counts_run_go = sprintf('Go_total_run_%d',j);
     ind_type_run = [intersect(find(blocks==j),go_event_ind)];   
     behav.(type_counts_run_go) = size(ind_type_run,2); 
+    n_run = size(ind_type_run,2);
     % stop
     type_counts_run_stop = sprintf('Stop_total_run_%d',j);
     ind_type_run = [intersect(find(blocks==j),stop_event_ind)];   
     behav.(type_counts_run_stop) = size(ind_type_run,2); 
+    n_run = n_run + size(ind_type_run,2);
+    % all: go, stop and other
+    ind_type_run = intersect(find(blocks==j),other_event_ind);
+    behav.(sprintf('Total_run_%d',j)) = n_run + size(ind_type_run,2);
   end
   
   % results for each condition
@@ -1003,19 +1209,51 @@ function [behav,runs_ok,event_info,errcode,errmsg] = get_behavioral_data(event_i
     end  
   end
 
-  % ssd and ssrt 
-  ssd = {event_info.ssd_dur}; 
-  behav.('SSD_mean_total')= mean(cell2mat(ssd));   
-  behav.('SSRT_mean_total') = behav.CorrectGo_rt_total-behav.SSD_mean_total; 
+  % ssd and ssrt
+  ssd_stop_inds = cellfun(@(t)(~isempty(strfind(t,'Stop'))), {event_info.type});
+  behav.('SSD_mean_total') = mean([event_info(ssd_stop_inds).ssd_dur]);
+  behav.('SSRT_mean_total') = behav.CorrectGo_rt_total-behav.SSD_mean_total;
 
-  % rm meaningless fields 
-  rmfields_names = {'NoRespGo_rt_total','NoRespGo_rt_run_1','NoRespGo_rt_run_2', ... 
-                    'NoRespGo_rt_std_total','NoRespGo_rt_std_run_1','NoRespGo_rt_std_run_2', ... 
+  % STE (stop-too-early) trial count: ssd_dur>0 and ssd_rt>0, computed
+  % directly from the raw per-trial fields rather than type=='STE', since
+  % ssd_dur/ssd_rt are untouched by revise_sst_types() regardless of
+  % ste_recode_flag (only stop_dur/go_*/type are recoded there) -- so
+  % this count is correct whether or not STE trials were recoded as Go
+  ssd_dur_all = {event_info.ssd_dur};
+  ssd_rt_all  = {event_info.ssd_rt};
+  ste_ind = find(cellfun(@(d) ~isempty(d) && d>0, ssd_dur_all) & ...
+                 cellfun(@(r) ~isempty(r) && r>0, ssd_rt_all));
+  behav.('STE_counts_total') = size(ste_ind,2);
+  behav.('STE_percent_total') = size(ste_ind,2)./size(stop_event_ind,2);
+  for j=1:2 % runs
+    behav.(sprintf('STE_counts_run_%d',j)) = 'NaN';
+    behav.(sprintf('STE_percent_run_%d',j)) = 'NaN';
+  end
+  for j=runs_ok
+    ind_run = intersect(find(blocks==j),ste_ind);
+    stop_run = intersect(find(blocks==j),stop_event_ind);
+    behav.(sprintf('STE_counts_run_%d',j)) = size(ind_run,2);
+    behav.(sprintf('STE_percent_run_%d',j)) = size(ind_run,2)./size(stop_run,2);
+  end
+
+  % ZeroSSDResp trial count: zero-SSD trials with an SSD-window response
+  zr_ind = find(strcmp({event_info.type},'ZeroSSDResp'));
+  behav.('ZeroSSDResp_counts_total') = size(zr_ind,2);
+  for j=1:2 % runs
+    behav.(sprintf('ZeroSSDResp_counts_run_%d',j)) = 'NaN';
+  end
+  for j=runs_ok
+    ind_run = intersect(find(blocks==j),zr_ind);
+    behav.(sprintf('ZeroSSDResp_counts_run_%d',j)) = size(ind_run,2);
+  end
+
+  % rm meaningless fields
+  rmfields_names = {'NoRespGo_rt_total','NoRespGo_rt_run_1','NoRespGo_rt_run_2', ...
+                    'NoRespGo_rt_std_total','NoRespGo_rt_std_run_1','NoRespGo_rt_std_run_2', ...
                     'CorrectStop_rt_total','CorrectStop_rt_run_1', ...
                     'CorrectStop_rt_std_total','CorrectStop_rt_std_run_1', ...
-                    'CorrectStop_rt_run_2','SSDStop_rt_total','SSDStop_rt_run_1',...
-                    'CorrectStop_rt_std_run_2','SSDStop_rt_std_total','SSDStop_rt_std_run_1',...
-                    'SSDStop_rt_run_2','SSDStop_rt_std_run_2'};
+                    'CorrectStop_rt_run_2',...
+                    'CorrectStop_rt_std_run_2'};
                   
   behav = rmfield(behav,rmfields_names); 
   
@@ -1144,6 +1382,19 @@ function [behav,runs_ok,event_info,errcode,errmsg] = get_behavioral_data(event_i
     event_info(j).stop_rt_adjusted = event_info(j).stop_rt_adjusted + event_info(j).ssd_dur;
   end
 
+  % null go_rt_adjusted/stop_rt_adjusted to NaN for true no-response
+  % trials (NoRespGo, CorrectStop) -- neither is touched by any override
+  % above, so they'd otherwise stay at their raw (0) value
+  inds = cellfun(@(x,y,z)( isempty(x) & isempty(y) & ~isempty(strfind(z,'Go')) ),...
+            {event_info.go_resp}, {event_info.fix_resp}, {event_info.type}, 'UniformOutput',0);
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+  [event_info(inds).go_rt_adjusted] = deal(NaN);
+
+  inds = cellfun(@(x,y,z,r)( isempty(x) & isempty(y) & isempty(z) & ~isempty(strfind(r,'Stop')) ),...
+            {event_info.stop_resp}, {event_info.fix_resp}, {event_info.ssd_resp}, {event_info.type}, 'UniformOutput',0);
+  inds = find(cellfun(@(x)(isequal(x,1)), inds));
+  [event_info(inds).stop_rt_adjusted] = deal(NaN);
+
   % check_omissions
   inds = cellfun(@(x,y,z)( isempty(x) & isempty(y) & ~isempty(strfind(z,'Go')) ),...
             {event_info.go_resp}, {event_info.fix_resp}, {event_info.type}, 'UniformOutput',0);
@@ -1168,7 +1419,7 @@ function [behav,runs_ok,event_info,errcode,errmsg] = get_behavioral_data(event_i
   % set omissions to max go.rt - if primary rt is_null means omission
   inds = cellfun( @(x)( strcmp(x,'omission') ), {go_trials.correct_go_response}, 'UniformOutput',0 );
   inds = find(cellfun(@(x)(isequal(x,1)), inds));
-  go_rt_max = max( [go_trials.go_rt] );
+  go_rt_max = max( [go_trials.go_rt_adjusted] );
   for i = 1:length(inds)
     j = inds(i);
     go_trials(j).go_rt_adjusted = go_rt_max;
@@ -1209,8 +1460,11 @@ function [behav,runs_ok,event_info,errcode,errmsg] = get_behavioral_data(event_i
   if parms.verbose, fprintf('%s: tfmri_sst_all_beh_total_issrt = %.4f\n',...
       mfilename,tfmri_sst_all_beh_total_issrt); end
 
-  % number of glitched trials
-  inds = arrayfun(@(x,y)( (x < 50) & (x > 0) & (y <= 50)), [event_info.ssd_rt], [event_info.ssd_dur]);
+  % number of glitched trials (stop and ZeroSSDResp trials, excluding STE
+  %   go/nuisance rows)
+  glitch_trials = event_info(cellfun(@(x)(~isempty(strfind(x,'Stop')) | ...
+    strcmp(x,'ZeroSSDResp')), {event_info.type}));
+  inds = arrayfun(@(x,y)( (x < 50) & (x > 0) & (y <= 50)), [glitch_trials.ssd_rt], [glitch_trials.ssd_dur]);
   tfmri_sst_beh_glitchcnt = sum(inds);
   if parms.verbose, fprintf('%s: tfmri_sst_beh_glitchcnt = %.0f\n',...
       mfilename,tfmri_sst_beh_glitchcnt); end
@@ -1283,6 +1537,8 @@ function get_behavioral_data_empty(parms)
     % stop
     type_counts_run_stop = sprintf('Stop_total_run_%d',j);  
     behav.(type_counts_run_stop) = 'NaN';  
+    % all
+    behav.(sprintf('Total_run_%d',j)) = 'NaN';
   end
   
   % results for each condition
@@ -1323,13 +1579,12 @@ function get_behavioral_data_empty(parms)
   behav.('SSD_mean_total')= 'NaN'; 
   behav.('SSRT_mean_total') = 'NaN';  
   % rm meaningless fields 
-  rmfields_names = {'NoRespGo_rt_total','NoRespGo_rt_run_1','NoRespGo_rt_run_2', ... 
-                    'NoRespGo_rt_std_total','NoRespGo_rt_std_run_1','NoRespGo_rt_std_run_2', ... 
+  rmfields_names = {'NoRespGo_rt_total','NoRespGo_rt_run_1','NoRespGo_rt_run_2', ...
+                    'NoRespGo_rt_std_total','NoRespGo_rt_std_run_1','NoRespGo_rt_std_run_2', ...
                     'CorrectStop_rt_total','CorrectStop_rt_run_1', ...
                     'CorrectStop_rt_std_total','CorrectStop_rt_std_run_1', ...
-                    'CorrectStop_rt_run_2','SSDStop_rt_total','SSDStop_rt_run_1',...
-                    'CorrectStop_rt_std_run_2','SSDStop_rt_std_total','SSDStop_rt_std_run_1',...
-                    'SSDStop_rt_run_2','SSDStop_rt_std_run_2'};
+                    'CorrectStop_rt_run_2',...
+                    'CorrectStop_rt_std_run_2'};
                   
   behav = rmfield(behav,rmfields_names); 
   % write to csv
